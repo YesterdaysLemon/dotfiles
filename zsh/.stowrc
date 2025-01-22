@@ -1,4 +1,0 @@
---dir $HOME/dotfiles/zsh
---target $HOME/
---ignore '.stowrc'
---ignore '.DS_Store'
