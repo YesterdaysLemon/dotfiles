@@ -22,6 +22,7 @@
           pkgs.wezterm
           pkgs.devbox
 	  pkgs.fzf
+	  pkgs.cowsay
         ];
       fonts.packages = 
         [
@@ -31,8 +32,8 @@
         enable = true;
         onActivation.cleanup = "uninstall";
         taps = [];
-        brews = ["cowsay" "fzf"];
-        casks = ["vlc" "raycast" "hiddenbar"];
+        brews = [];
+        casks = ["vlc" "raycast" "hiddenbar"]; 
       };
       users.users.lemon = {
           name = "lemon";
