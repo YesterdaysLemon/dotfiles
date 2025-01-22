@@ -32,4 +32,12 @@ setopt hist_find_no_dups
 # aliases
 alias ls='ls --color'
 alias ll='ls --color -lhat'
+
+alias ..='cd ..'
+alias ...='cd ../../'
+alias ....='cd ../../../'
+
+alias vim='nvim'
+
 alias switch='darwin-rebuild switch --flake "$(readlink -f ~/.config/nix)#macbook"'
+
