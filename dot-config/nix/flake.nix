@@ -23,6 +23,8 @@
           pkgs.devbox
 	  pkgs.fzf
 	  pkgs.cowsay
+          pkgs.starship
+          pkgs.cbonsai
         ];
       fonts.packages = 
         [
