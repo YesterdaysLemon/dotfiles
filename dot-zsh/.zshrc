@@ -41,3 +41,6 @@ alias vim='nvim'
 
 alias switch='darwin-rebuild switch --flake "$(readlink -f ~/.config/nix)#macbook"'
 
+# starship
+eval "$(starship init zsh)"
+
