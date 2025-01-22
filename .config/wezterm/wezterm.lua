@@ -1,6 +1,0 @@
-local wezterm = require("wezterm")
-local config = wezterm.config_builder()
-
-config.color_scheme = "Monokai Pro (Gogh)"
-
-return config
