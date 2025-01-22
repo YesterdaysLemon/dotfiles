@@ -1,4 +1,5 @@
---target=$HOME/.config/
---ignore='.stowrc'
---ignore='.DS_Store'
+--dir $HOME/dotfiles
+--target $HOME/.config
+--ignore '.stowrc'
+--ignore '.DS_Store'
 
