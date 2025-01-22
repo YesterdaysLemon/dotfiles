@@ -21,6 +21,7 @@
           pkgs.stow
           pkgs.wezterm
           pkgs.devbox
+	  pkgs.fzf
         ];
       fonts.packages = 
         [
@@ -59,7 +60,7 @@
   in
   {
     # Build darwin flake using:
-    # $ darwin-rebuild build --flake .#simple
+    # $ darwin-rebuild build --flake .#macbook
     darwinConfigurations."macbook" = nix-darwin.lib.darwinSystem {
       modules = [ 
         configuration
