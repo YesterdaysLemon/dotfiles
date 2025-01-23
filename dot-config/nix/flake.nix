@@ -32,10 +32,17 @@
         ];
       homebrew = {
         enable = true;
-        onActivation.cleanup = "uninstall";
-        taps = [];
+        onActivation.cleanup = "zap";
+        taps = [
+          "nikitabobko/tap"
+        ];
         brews = [];
-        casks = ["vlc" "raycast" "hiddenbar"]; 
+        casks = [
+          "vlc"
+          "raycast"
+          "hiddenbar"
+          "aerospace"
+          ]; 
       };
       users.users.lemon = {
           name = "lemon";
