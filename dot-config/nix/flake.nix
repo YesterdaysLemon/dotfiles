@@ -25,6 +25,9 @@
 	  pkgs.cowsay
           pkgs.starship
           pkgs.cbonsai
+          pkgs.docker
+          pkgs.docker-compose
+          pkgs.curl
         ];
       fonts.packages = 
         [
