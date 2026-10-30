@@ -1,0 +1,8 @@
+# herdr configuration (all options: herdr --default-config)
+
+[theme]
+name = "gruvbox"
+
+# let wezterm's background (and its blur) show through
+[theme.custom]
+panel_bg = "reset"
