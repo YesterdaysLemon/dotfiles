@@ -1,3 +1,10 @@
 .DS_Store
 .zsh_history
 .zcompdump
+
+# gh can store the login token here
+dot-config/gh/hosts.yml
+
+# app-managed folders: installed extension code and auto backups
+dot-config/raycast/
+dot-config/karabiner/automatic_backups/
