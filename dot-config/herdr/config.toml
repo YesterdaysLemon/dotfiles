@@ -1,8 +1,23 @@
+onboarding = false
 # herdr configuration (all options: herdr --default-config)
 
 [theme]
 name = "gruvbox"
 
 # let wezterm's background (and its blur) show through
+auto_switch = false
 [theme.custom]
 panel_bg = "reset"
+
+[ui.toast]
+delivery = "herdr"
+
+# prefix: ctrl+space (herdr's default is ctrl+b)
+[keys]
+prefix = "ctrl+space"
+
+# promote: click a pane in the right-hand stack, press prefix+enter to swap it into the big left slot
+[[keys.command]]
+key = "prefix+enter"
+type = "shell"
+command = "herdr pane swap --direction left"
