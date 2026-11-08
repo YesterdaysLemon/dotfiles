@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CACHE_MS, pathKey, canReadScreen, safeAvatar, projectHerd, stateHistory, detectPrompt, screenText, promptCandidates, currentPrompts } from './model.mjs';
+import { CACHE_MS, pathKey, canReadScreen, safeAvatar, projectHerd, withPromptStates, stateHistory, detectPrompt, screenText, promptCandidates, currentPrompts } from './model.mjs';
 
 const userHome = 'C:/Users/example';
 const quiet = { address: 't1', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample' };
@@ -81,4 +81,26 @@ test('cache rotates oldest quiet seats and invalidates moved, working, expired o
   assert.equal(currentPrompts([quiet], cache, now + CACHE_MS, userHome).length, 0);
   assert.equal(currentPrompts([], cache, now, userHome).length, 0);
   assert.equal(promptCandidates([quiet, { ...quiet, address: 't2' }], cache, now + CACHE_MS, userHome)[0].address, 't2');
+});
+
+test('a current prompt undims the seat, counts as blocked and ranks its institution first without changing the reported state', () => {
+  const now = 200000;
+  const prompt = detectPrompt(trust);
+  const cache = { t1: { checked: now - 1000, cwd: pathKey(quiet.cwd), prompt } };
+  const groups = [
+    { key: 'working', name: 'A working group', seats: [{ ...quiet, address: 't2', status: 'working' }] },
+    { key: 'waiting', name: 'Z waiting group', seats: [quiet, { ...quiet, address: 't3' }] },
+  ];
+  const overlaid = withPromptStates(groups, cache, now, userHome);
+  assert.equal(overlaid[0].key, 'waiting');
+  assert.equal(overlaid[0].status, 'blocked');
+  assert.equal(overlaid[0].quiet, false);
+  assert.equal(overlaid[0].seats.filter(s => s.status === 'blocked').length, 1);
+  assert.equal(overlaid[0].seats.filter(s => s.status === 'idle').length, 1);
+  assert.equal(overlaid[0].seats[0].promptWait, true);
+  assert.equal(overlaid[0].seats[0].reportedStatus, 'idle');
+  assert.equal(quiet.status, 'idle');
+  assert.equal(withPromptStates(groups, cache, now + CACHE_MS, userHome)[0].key, 'working');
+  const running = [{ ...groups[1], seats: [{ ...quiet, status: 'working' }] }];
+  assert.equal(withPromptStates(running, cache, now, userHome)[0].status, 'working');
 });

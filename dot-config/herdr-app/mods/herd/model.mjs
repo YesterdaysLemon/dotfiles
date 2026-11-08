@@ -147,3 +147,19 @@ export function currentPrompts(seats, cache, now, userHome, extraRoots = []) {
       ? [{ ...seat, ...entry.prompt, checked: entry.checked }] : [];
   });
 }
+
+// Effective triage state includes a current recognized menu, without rewriting
+// the program's reported state. Expired, moved or working seats lose the overlay.
+export function withPromptStates(groups, cache, now, userHome, extraRoots = []) {
+  const prompts = new Map(currentPrompts(groups.flatMap(g => g.seats), cache, now, userHome, extraRoots).map(p => [p.address, p]));
+  return groups.map(group => {
+    const seats = group.seats.map(seat => {
+      const prompt = prompts.get(seat.address);
+      return prompt ? { ...seat, reportedStatus: seat.status, status: 'blocked', promptWait: true, promptChecked: prompt.checked } : seat;
+    });
+    return { ...group, seats,
+      status: seats.reduce((top, seat) => RANK[seat.status] > RANK[top] ? seat.status : top, 'unknown'),
+      quiet: seats.every(s => ['idle', 'unknown'].includes(s.status)),
+    };
+  }).sort((a, b) => RANK[b.status] - RANK[a.status] || a.name.localeCompare(b.name));
+}

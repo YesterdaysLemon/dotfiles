@@ -2,7 +2,7 @@
 import { View, div, image, svg } from 'gpui-kit';
 import { v_flex, h_flex } from 'gpui-base';
 import { agents, terminals, panes, spaces, run, theme, shared, home, hc, props, nextCommand } from 'herdr';
-import { RANK, CACHE_MS, projectHerd, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
+import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
 const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states') || '{}'); } catch { return {}; } };
@@ -10,6 +10,7 @@ const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states
 export default class Herd extends View {
   init(_props, cx) {
     this.history = stored();
+    this.historyDirty = false;
     this.cache = {};
     this.width = 340;
     this.scanning = false;
@@ -20,21 +21,29 @@ export default class Herd extends View {
         if (await nextCommand() === 'refresh') this.scan(cx);
       }
     });
-    // Data checks and minute labels only. No animation timers or model calls.
-    cx.timer.every(45000, cx => { this.scan(cx); cx.notify(); });
+    // Persist observed state outside render. These are data/clock timers, not animation.
+    cx.timer.every(30000, cx => { this.saveHistory(); cx.notify(); });
+    cx.timer.every(45000, cx => this.scan(cx));
   }
 
   snapshot() {
     const groups = projectHerd({ agents: agents(), terminals: terminals(), panes: panes(), spaces: spaces() });
     const scope = props() ?? {};
-    return groups.map(group => {
+    const scoped = groups.map(group => {
       const seats = group.seats.filter(s => (!scope.space || s.space === scope.space) &&
         (!scope.personalOnly || canReadScreen({ ...s, status: 'idle' }, home())));
-      return { ...group, seats,
-        quiet: seats.every(s => ['idle', 'unknown'].includes(s.status)),
-        status: seats.reduce((top, seat) => RANK[seat.status] > RANK[top] ? seat.status : top, 'unknown') };
+      return { ...group, seats };
     }).filter(group => group.seats.length);
+    return withPromptStates(scoped, this.cache, Date.now(), home(), this.roots());
   }
+
+  saveHistory() {
+    if (!this.historyDirty) return;
+    localStorage.setItem('herd.states', JSON.stringify(this.history));
+    this.historyDirty = false;
+  }
+
+  close() { this.saveHistory(); }
 
   roots() {
     const value = shared('herd.screenRoots');
@@ -72,6 +81,7 @@ export default class Herd extends View {
         this.lastCheck = Date.now();
       } finally {
         this.scanning = false;
+        this.saveHistory();
         cx.notify();
       }
     });
@@ -103,7 +113,7 @@ export default class Herd extends View {
       .when(seat.focused, el => el.bg(t.selected))
       .when(quiet, el => el.opacity(0.68))
       .hover(el => el.bg(t.hover).opacity(1))
-      .tooltip(`${label}\n${STATE[seat.status]} · ${age} since observed state change${seat.fixture ? '\nPreview fixture' : ''}`)
+      .tooltip(`${label}\n${STATE[seat.status]} · ${age} since observed state change${seat.promptWait ? `\nRecognized screen prompt (reported state: ${STATE[seat.reportedStatus] || 'unknown'}).` : ''}${seat.fixture ? '\nPreview fixture' : ''}`)
       .on_click(() => this.jump(seat))
       .child(this.face(seat, t, compact ? 24 : 32))
       .when(!compact, el => el.child(v_flex().flex_1().min_w(0).gap(3)
@@ -111,6 +121,7 @@ export default class Herd extends View {
         .child(h_flex().gap(5).items_center()
           .child(this.stateMark(seat, t))
           .child(div().text_size(10.5).text_color(t.muted).child(`${STATE[seat.status]} · ${age}`))
+          .when(seat.promptWait, el => el.child(div().text_size(9).text_color(t.dim).child('screen')))
           .when(seat.fixture, el => el.child(div().text_size(9).text_color(t.dim).child('fixture'))))))
       .when(!compact, el => el.child(div().text_size(11).text_color(t.dim).child('›')));
   }
@@ -155,7 +166,7 @@ export default class Herd extends View {
     const next = stateHistory(this.history, seats, now);
     if (JSON.stringify(next) !== JSON.stringify(this.history)) {
       this.history = next;
-      localStorage.setItem('herd.states', JSON.stringify(next));
+      this.historyDirty = true;
     }
     const prompts = currentPrompts(seats, this.cache, now, home(), this.roots());
     const compact = this.width < 180;

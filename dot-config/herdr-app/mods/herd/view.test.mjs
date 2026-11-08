@@ -28,14 +28,15 @@ function find(node, id) {
   return null;
 }
 
-function harness() {
+function harness(storage = new Map()) {
   const calls = [];
-  const names = ['RANK', 'CACHE_MS', 'projectHerd', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen'];
+  const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
   const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'run', 'theme', 'shared', 'home', 'localStorage', ...names, source)(
     class {}, element, element, element, element, element,
-    (...args) => calls.push(args), () => new Proxy({}, { get: (_, key) => String(key) }), () => [], () => 'C:/Users/example', { setItem() {} },
+    (...args) => calls.push(args), () => new Proxy({}, { get: (_, key) => String(key) }), () => [], () => 'C:/Users/example',
+    { setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) ?? null },
     ...names.map(name => model[name]),
   );
   const view = new Herd();
@@ -45,7 +46,7 @@ function harness() {
   view.width = 340;
   view.lastCheck = Date.now();
   view.cache = { t1: { checked: Date.now(), cwd: model.pathKey(seat.cwd), prompt: { id: 'claude-trust', title: 'Folder trust', key: 'Enter', quote: 'Do you trust the files in this folder?' } } };
-  return { view, seat, calls };
+  return { view, seat, calls, storage };
 }
 
 test('quiet seats remain visible, dimmed and clickable; rendering sends no terminal actions', () => {
@@ -74,4 +75,18 @@ test('a seat without a pane peeks, and compact mode still includes quiet seats',
   assert.ok(row);
   row.click();
   assert.deepEqual(calls, [['terminal.peek', { terminal: 't1' }]]);
+});
+
+test('observed history persists outside render and survives a fresh view reload', () => {
+  const first = harness();
+  first.view.render();
+  assert.equal(first.storage.size, 0, 'render does not write storage');
+  const observedAt = first.view.history.t1.at;
+  first.view.saveHistory();
+  assert.ok(first.storage.has('herd.states'));
+  const reloaded = harness(first.storage).view;
+  reloaded.scan = () => {};
+  reloaded.init({}, { spawn() {}, timer: { every() {} } });
+  reloaded.render();
+  assert.equal(reloaded.history.t1.at, observedAt);
 });

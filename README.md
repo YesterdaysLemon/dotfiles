@@ -37,6 +37,8 @@ The optional **herd** layout puts institutions first: a card for each institutio
 roles, current state and time in that state. Quiet seats stay visible. The needs-you strip shows recognized folder
 trust and command approval menus above an asks placeholder. Clicking a seat or prompt opens its terminal; review
 and confirm there yourself. The mod never approves anything or sends keystrokes.
+While a recognized prompt is current, its seat and institution count as **Needs you**, even if the program has
+reported no status. A small screen label and tooltip distinguish that observation from the program's own report.
 
 The installer includes it while keeping `seats-main` as the default. To try it after installation:
 
