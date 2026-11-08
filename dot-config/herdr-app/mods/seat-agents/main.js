@@ -296,13 +296,15 @@ export default class Agents extends View {
     const seatOf = new Map(all.filter((k) => k.labels?.role).map((k) => {
       const repo = String(k.cwd ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
       const inst = k.labels.seats || "";
-      return [k.address, { role: k.labels.role, inst, instName: inst.replace(/[-_]+/g, " "),
+      // avatar: a picture the seat chose (hc label `avatar`, a path under ~/.config/herdr-app), shown instead of the CLI icon
+      return [k.address, { role: k.labels.role, inst, instName: inst.replace(/[-_]+/g, " "), avatar: k.labels.avatar || "",
         rest: [k.labels.moniker, repo].filter(Boolean).join(" · "), short: k.labels.moniker || "" }];
     }));
     const groupKey = (a) => { const s = seatOf.get(a.address); return s?.inst ? `${a.space}\u0000${s.inst}` : `${a.space}`; };
 
     const row = (a, i, subs = []) => {
-      const pic = icon(a.program, 16, t.foreground);
+      const chosen = seatOf.get(a.address)?.avatar;
+      const pic = chosen ? image(chosen).w(18).h(18).flex_none().rounded(9) : icon(a.program, 16, t.foreground);
       const more = detail.get(a.address);
       // An agent on another machine (`vps/t7`) says which.
       const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
