@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="450" viewBox="0 0 720 450">
+  <rect width="720" height="450" rx="12" fill="#101215"/>
+  <path d="M254 0v450" stroke="#30343b"/>
+  <g font-family="sans-serif">
+    <text x="20" y="32" fill="#f0f1f3" font-size="17" font-weight="600">Herd</text>
+    <text x="20" y="60" fill="#a3a8b0" font-size="10">NEEDS YOU</text>
+    <rect x="15" y="72" width="224" height="62" rx="8" fill="#1c2026" stroke="#353b44"/>
+    <text x="27" y="91" fill="#d1d5da" font-size="11">At the terminal</text>
+    <text x="27" y="113" fill="#a3a8b0" font-size="10">Review a waiting prompt  &#x2192;</text>
+    <rect x="15" y="144" width="224" height="45" rx="8" fill="#16191d" stroke="#30343b"/>
+    <text x="27" y="164" fill="#a3a8b0" font-size="11">Asks to you</text>
+    <rect x="15" y="202" width="224" height="157" rx="10" fill="#1a1d22" stroke="#30343b"/>
+    <text x="29" y="226" fill="#f0f1f3" font-size="14" font-weight="600">Institution</text>
+    <text x="29" y="244" fill="#8d949e" font-size="10">1 working &#183; 1 quiet</text>
+    <circle cx="44" cy="278" r="15" fill="#acb9e4"/>
+    <circle cx="39" cy="276" r="2" fill="#232735"/><circle cx="49" cy="276" r="2" fill="#232735"/>
+    <text x="70" y="275" fill="#e6e8ec" font-size="11">Seat 1 &#183; guide</text>
+    <text x="70" y="292" fill="#a3a8b0" font-size="10">Working &#183; 3m</text>
+    <g opacity=".64">
+      <circle cx="44" cy="326" r="15" fill="#90c3ba"/>
+      <circle cx="39" cy="324" r="2" fill="#232735"/><circle cx="49" cy="324" r="2" fill="#232735"/>
+      <text x="70" y="323" fill="#e6e8ec" font-size="11">Seat 2 &#183; maker</text>
+      <text x="70" y="340" fill="#a3a8b0" font-size="10">Quiet &#183; 8m</text>
+    </g>
+    <text x="20" y="426" fill="#8d949e" font-size="10">Quiet seats stay in view.</text>
+    <rect x="270" y="15" width="433" height="420" rx="8" fill="#191c21" stroke="#30343b"/>
+    <path d="M270 48h433" stroke="#30343b"/>
+    <text x="289" y="36" fill="#a3a8b0" font-size="11">Workspace</text>
+    <text x="291" y="82" fill="#9cc2ae" font-family="monospace" font-size="12">&gt; _</text>
+  </g>
+</svg>

@@ -12,7 +12,8 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 src="$repo/dot-config/herdr-app"
 home="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 layout="seats-main"
-files=(settings.json keys.json layouts/seats-main.json mods/seat-agents/main.js mods/seat-agents/mod.json)
+files=(settings.json keys.json layouts/seats-main.json mods/seat-agents/main.js mods/seat-agents/mod.json
+  layouts/herd.json layouts/herd.svg mods/herd/main.js mods/herd/mod.json mods/herd/model.mjs)
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) windows=1 ;; *) windows=0 ;; esac
 app() { MSYS2_ARG_CONV_EXCL='*' herdr-app "$@"; }
 
@@ -32,9 +33,11 @@ done
 # Which layout shows is Herdr's own state (shared.json "layout"), not a setting, so this script picks it:
 # live through the running window, otherwise in the state the app reads when it next starts.
 if command -v herdr-app >/dev/null 2>&1 && app status >/dev/null 2>&1; then
-  mod="$home/mods/seat-agents"
-  ((windows)) && mod="$(cygpath -w "$mod")" # the app is a Windows program; it can't read Git Bash paths
-  app check "$mod" >/dev/null
+  for name in seat-agents herd; do
+    mod="$home/mods/$name"
+    ((windows)) && mod="$(cygpath -w "$mod")" # the app is a Windows program; it can't read Git Bash paths
+    app check "$mod" >/dev/null
+  done
   app do layout.switch --name "$layout" >/dev/null
   echo "herdr-app: files in place; showing $layout"
 else

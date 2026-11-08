@@ -33,6 +33,27 @@ scripts/herdr-app.sh capture   # Windows only: copy changes made in the app back
 It's safe to re-run. A different existing file is kept beside its replacement as `*.before-dotfiles`. On Windows, run
 it from Git Bash.
 
+The optional **herd** layout puts institutions first: a card for each institution, with familiar faces, names and
+roles, current state and time in that state. Quiet seats stay visible. The needs-you strip shows recognized folder
+trust and command approval menus above an asks placeholder. Clicking a seat or prompt opens its terminal; review
+and confirm there yourself. The mod never approves anything or sends keystrokes.
+
+The installer includes it while keeping `seats-main` as the default. To try it after installation:
+
+```sh
+herdr-app check ~/.config/herdr-app/mods/herd
+herdr-app do layout.switch --name herd
+# back to the existing sidebar:
+herdr-app do layout.switch --name seats-main
+```
+
+Prompt checks are local, only for quiet/waiting personal seats under `~/Project`; `~/Work`, remote terminals and
+working seats are excluded. At most four current screens are checked every 45 seconds, cached for 90 seconds.
+Only a recognized quote is retained in memory. Unrecognized prompts can be missed; the strip is not an all-clear.
+`herd.screenRoots` in local mod shared state can add personal roots, while Work stays excluded. The asks ledger,
+artifact thumbnails and model summaries are later phases. Run the pure scope/grouping/prompt tests with
+`node --test dot-config/herdr-app/mods/herd/*.test.mjs`.
+
 ## raycast extensions
 
 raycast installs these itself, so they aren't kept here:
