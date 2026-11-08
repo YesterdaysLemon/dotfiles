@@ -1,0 +1,27 @@
+# Managed by al-stack. Keep extended prose in AGENTS.md.
+"schema" = 1
+
+["project"]
+"id" = "fc3f6bfa-2c81-4a30-8849-bd1ea0052453"
+"name" = "dotfiles"
+"status" = "experimental"
+"profile" = "general"
+"purpose" = "Personal configuration files and native Herdr mods."
+
+["stack"]
+"version" = "0.1.0"
+"revision" = "11eac15f6a8a0dc76f06ef97c7c3a27c7f668e0a+dirty.14419bcd734fed27"
+
+["commands"]
+"check-herd" = "herdr-app check dot-config/herdr-app/mods/herd"
+"test-herd" = "node --test dot-config/herdr-app/mods/herd/*.test.mjs"
+
+[["tools"]]
+"name" = "herdr-app"
+"kind" = "cli"
+"command" = "herdr-app"
+
+[["tools"]]
+"name" = "node"
+"kind" = "cli"
+"command" = "node"
