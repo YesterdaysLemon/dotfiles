@@ -3,3 +3,7 @@
 --ignore '.DS_Store'
 
 --ignore 'Brewfile'
+
+# placed by scripts/herdr-app.sh (per file), so the app's own files never land in this repo
+--ignore 'herdr-app'
+--ignore 'scripts'
