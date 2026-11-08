@@ -8,3 +8,8 @@ dot-config/gh/hosts.yml
 # app-managed folders: installed extension code and auto backups
 dot-config/raycast/
 dot-config/karabiner/automatic_backups/
+
+# Written by herdr-app check; the installed app supplies these contracts.
+dot-config/herdr-app/mods/*/gpui-kit.d.ts
+dot-config/herdr-app/mods/*/herdr.d.ts
+dot-config/herdr-app/mods/*/jsconfig.json
