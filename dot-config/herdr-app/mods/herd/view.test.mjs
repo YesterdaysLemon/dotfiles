@@ -9,6 +9,8 @@ import * as model from './model.mjs';
 import * as artifacts from './artifacts.mjs';
 import * as asks from './asks.mjs';
 import * as sentences from './sentences.mjs';
+import * as facts from './facts.mjs';
+import * as grid from './grid.mjs';
 
 // Exercise the shipped view's real callbacks with a tiny GPUI description recorder.
 // Native layout/paint is checked separately by herdr-app and review screenshots.
@@ -35,35 +37,41 @@ function find(node, id) {
   return null;
 }
 
-function harness(storage = new Map(), execute = async () => ({ code: 1 }), userHome = 'C:/Users/example') {
+function harness(storage = new Map(), execute = async () => ({ code: 1 }), userHome = 'C:/Users/example', viewProps = {}) {
   const calls = [];
   const sharedState = new Map();
+  const native = { panes: [{ pane: 'p1', terminal: 't1', tab: 'tab', zoomed: false }],
+    spaces: [{ id: 's1', name: 'First', folder: userHome + '/Project/sample', machine: null, tabs: [{ id: 'tab' }] }],
+    focus: { space: 's1', tab: 'tab', pane: 'p1' } };
   const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {} }) };
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
     'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages',
-    'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity'];
+    'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity',
+    'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
-  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'window', 'hc', ...names, source)(
+  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'window', 'hc', 'panes', 'spaces', 'focused', ...names, source)(
     class {}, element, element, element, element, element,
     { new: element }, InputState,
     (...args) => calls.push(args), () => new Proxy({}, { get: (_, key) => String(key) }), key => sharedState.get(key), (key, value) => sharedState.set(key, value), () => userHome,
     { setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) ?? null },
-    () => ({}), execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]),
+    () => viewProps, execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]),
     () => ({ platform: 'linux' }),
     args => execute('hc', args),
-    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences })[name]),
+    () => native.panes, () => native.spaces, () => native.focus,
+    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid })[name]),
   );
   const view = new Herd();
-  const seat = { address: 't1', pane: 'p1', name: 'Sample', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample', institution: 'sample' };
+  const seat = { address: 't1', pane: 'p1', space: 's1', name: 'Sample', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample', institution: 'sample' };
   view.snapshot = () => [{ key: 'sample', name: 'Sample institution', workspace: 'sample', status: 'idle', quiet: true, seats: [seat] }];
   view.history = {};
   view.personalView = true;
   view.width = 340;
   view.lastCheck = Date.now();
   view.answerStates = {}; view.askInputs = {}; view.evidence = {};
+  view.livePanes = native.panes; view.liveSpaces = native.spaces; view.liveFocus = native.focus;
   view.cache = { t1: { checked: Date.now(), cwd: model.pathKey(seat.cwd), prompt: { id: 'claude-trust', title: 'Folder trust', key: 'Enter', quote: 'Do you trust the files in this folder?' } } };
-  return { view, seat, calls, storage, sharedState };
+  return { view, seat, calls, storage, sharedState, native };
 }
 
 test('quiet seats remain visible, dimmed and clickable; rendering sends no terminal actions', () => {
@@ -342,6 +350,89 @@ test('a missing owner disables answers, and Work starts no evidence reads', asyn
   ask.owner_project = 'C:/Users/example/Project/sample';
   view.loadEvidence(cx); await task;
   assert.deepEqual(view.evidence, {});
+});
+
+test('a grid copy starts no readers and consumes the sidebar quote without persisting it', () => {
+  const record = { institution: 'sample', space: 's1', tab: 'tab', focusPane: 'p1', zoomPane: null, token: 'fixture' };
+  const { view, seat, native, calls, storage, sharedState } = harness(new Map(), async () => assert.fail('a grid cannot execute readers'), 'C:/Users/example', { grid: record });
+  native.panes.push({ pane: 'pg', tab: 'tab', mod: 'herd', zoomed: false });
+  sharedState.set('herd.gridPanes', { tab: { ...record, pane: 'pg' } });
+  const timers = [];
+  view.init({}, { spawn() { assert.fail('grid init cannot start reader tasks'); }, timer: { every(ms) { timers.push(ms); } } });
+  assert.deepEqual(timers, [30000]);
+  assert.deepEqual(calls, []);
+  calls.length = 0;
+  Object.assign(seat, { app: 'codex', status: 'working', avatar: 'avatars/sample/current.png' });
+  const owner = {}, now = Date.now();
+  facts.publishFacts(owner, { t1: { checked: now, cwd: model.pathKey(seat.cwd), app: model.screenIdentity(seat), pane: seat.pane, space: seat.space,
+    quote: { text: 'I am checking the shared preview.' } } }, { t1: { status: seat.status, at: now - 60000 } }, now);
+  const tree = view.render();
+  assert.ok(find(tree, 'herd-grid-face-t1'));
+  assert.equal(find(tree, 'herd-grid-sentence-t1').childNodes[0], 'I am checking the shared preview.');
+  assert.deepEqual(calls, []);
+  view.saveHistory();
+  assert.ok(![...storage.values()].some(value => value.includes('shared preview')));
+  view.personalView = false;
+  const work = view.render();
+  assert.equal(find(work, 'herd-grid-face-t1'), null);
+  assert.equal(find(work, 'herd-grid-sentence-t1'), null);
+  assert.deepEqual(view.cache, {});
+  facts.forgetFacts(owner);
+});
+
+test('opening a grid guards rapid clicks and creates only a new owned mod pane', async () => {
+  let resolve;
+  const commands = [];
+  const { view, seat, sharedState } = harness(new Map(), async (...args) => {
+    commands.push(args); return new Promise(done => { resolve = done; });
+  });
+  const group = { key: 'sample', seats: [seat] };
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.openGrid(group, cx); view.openGrid(group, cx);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0][0], 'herdr-app');
+  const request = JSON.parse(commands[0][1][2]);
+  assert.equal(request.mod, 'herd'); assert.equal(request.pane, 'p1');
+  assert.equal(request.props.grid.institution, 'sample');
+  resolve({ code: 0, stdout: '{"pane":"pg"}' }); await task;
+  assert.equal(sharedState.get('herd.gridPanes').tab.pane, 'pg');
+  assert.equal(view.gridBusy, false);
+});
+
+test('restored sidebar state times are available to a new grid before the first reader finishes', () => {
+  const at = Date.now() - 60000;
+  const { view, seat } = harness(new Map([['herd.states', JSON.stringify({ t1: { status: 'idle', at } })]]));
+  view.scan = () => {}; view.refreshMetadata = () => {}; view.refreshAsks = () => {};
+  view.init({}, { spawn() {}, timer: { every() {} } });
+  assert.equal(facts.consumeFacts([seat], Date.now()).history.t1.at, at);
+  view.close();
+});
+
+test('return awaits zoom and focus, then closes only the grid as its last host action', async () => {
+  const commands = [];
+  const { view, native, calls } = harness(new Map(), async (...args) => { commands.push(args); return { code: 0, stdout: '{"ok":true}' }; });
+  native.panes.push({ pane: 'pg', mod: 'herd', tab: 'tab', zoomed: true });
+  const record = { institution: 'sample', space: 's1', tab: 'tab', pane: 'pg', focusPane: 'p1', zoomPane: null };
+  let task;
+  const cx = { notify() { assert.ok(!calls.some(call => call[0] === 'pane.close'), 'no cx use after closing'); }, spawn(body) { task = body(cx); } };
+  view.returnGrid(record, cx); await task;
+  assert.deepEqual(commands.map(command => command[1][1]), ['pane.zoom', 'pane.focus']);
+  assert.deepEqual(calls, [['pane.close', { pane: 'pg' }]]);
+});
+
+test('the fallback handoff receives only validated owned grids and preserves current terminal focus', async () => {
+  const commands = [];
+  const { view, native, sharedState, calls } = harness(new Map(), async (...args) => { commands.push(args); return { code: 0 }; });
+  native.panes.push({ pane: 'pg', mod: 'herd', tab: 'tab', zoomed: false });
+  const record = { institution: 'sample', space: 's1', tab: 'tab', pane: 'pg', focusPane: 'p1', zoomPane: null, token: 'fixture' };
+  sharedState.set('herd.gridPanes', { tab: record, forged: { ...record, pane: 'p1' } });
+  sharedState.set('layout', 'herd'); // Native close still sees the layout it is leaving.
+  view.factOwner = {};
+  await view.close();
+  assert.equal(commands.length, 1); assert.equal(commands[0][0], 'node');
+  assert.ok(commands[0][1][0].endsWith('/grid-exit.mjs'));
+  assert.deepEqual(JSON.parse(commands[0][1][1]), { panes: ['pg'], focus: null, zooms: [] });
+  assert.deepEqual(calls, []);
 });
 
 test('a screen moved to Work while its read was in flight never becomes a quote', async () => {

@@ -23,6 +23,15 @@ synthetic fixtures plainly and stop only owned fixtures after review. Space memb
 and pinned access come from live labels, never private institution names. Non-personal views use metadata only,
 without faces or any reader; local liaison cards lead. Test both space scopes with a neutral body, not Work screens.
 
+The Grid button creates one zoomed herd mod pane inside an institution tab. Bind its ID from the native split
+receipt using an instance token: mod panes receive only supplied props. Validate its actual pane/tab/space before
+rendering or closing it. Terminals restores the prior zoom and focus, then closes only the owned mod pane as the
+last host action; preserve terminal IDs and splits. Grid copies start no readers: bounded module-memory facts
+reuse sidebar quotes and observed state times, expire and never persist quotes. Tile positions stay stable across
+state changes. Work grids remain metadata only. Native QA must prove the before/after split and focus restoration.
+Switching to seats-main starts a bounded Node handoff that removes validated owned grid panes and restores focus;
+otherwise a zoomed pane would survive the layout fallback. It never closes a terminal or edits shipped mods.
+
 Artifact metadata comes only from the personal seats kit's `seats info --json` schema v1. `artifacts.mjs` validates
 institution identity and local scope; `artifact-reader.mjs` reads the newest committed match of the declared glob and
 caches bounded committed PNGs under the application home's `herd-cache/`. Node and Git provide the optional artifact reader; no npm packages or image decoder are required. Keep cache files out of Git. No automatic LFS fetch, shell config parsing in the mod,

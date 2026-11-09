@@ -7,12 +7,15 @@ import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, f
 import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
+import { publishFacts, consumeFacts, forgetFacts } from './facts.mjs';
+import { validateGrid, boundGrid, gridTarget, gridSeats, restoreGridPlan, gridApi } from './grid.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
 const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states') || '{}'); } catch { return {}; } };
 
 export default class Herd extends View {
   init(_props, cx) {
+    this.gridRequested = props()?.grid != null;
     this.askList = Array.isArray(props()?.askList) ? parseAsks(JSON.stringify(props().askList)) : null;
     this.preview = acceptArtifact(props()?.artifactPreview);
     if (this.preview) return;
@@ -36,12 +39,21 @@ export default class Herd extends View {
     this.askInputs = {};
     this.evidence = {};
     this.evidenceBusy = false;
+    this.gridBusy = false;
+    this.gridError = null;
+    if (this.gridRequested) {
+      this.grid = boundGrid(props().grid, shared('herd.gridPanes'), panes(), spaces());
+      cx.timer.every(30000, cx => cx.notify());
+      return; // Grid copies consume facts, never start readers.
+    }
     if (this.askList) {
       this.prepareAskInputs();
       this.loadEvidence(cx);
       cx.timer.every(60000, cx => this.refreshAsks(cx));
       return;
     }
+    this.factOwner = {};
+    publishFacts(this.factOwner, {}, this.history, Date.now());
     this.scan(cx);
     this.refreshMetadata(cx);
     this.refreshAsks(cx);
@@ -298,9 +310,12 @@ export default class Herd extends View {
 
   snapshot() {
     const allSpaces = spaces();
-    const groups = projectHerd({ agents: agents(), terminals: terminals(), panes: panes(), spaces: allSpaces });
+    this.livePanes = panes();
+    this.liveSpaces = allSpaces;
+    this.liveFocus = focused();
+    const groups = projectHerd({ agents: agents(), terminals: terminals(), panes: this.livePanes, spaces: allSpaces });
     this.askerGroups = groups;
-    this.viewSpace = props()?.space || focused()?.space;
+    this.viewSpace = this.grid?.space || props()?.space || this.liveFocus?.space;
     const view = spaceHerd(groups, allSpaces, this.viewSpace, home());
     this.personalView = view.personal;
     this.spaceName = view.spaceName;
@@ -308,12 +323,145 @@ export default class Herd extends View {
   }
 
   saveHistory() {
+    if (this.factOwner) publishFacts(this.factOwner, this.personalView ? this.cache : {}, this.history, Date.now());
     if (!this.historyDirty) return;
     localStorage.setItem('herd.states', JSON.stringify(this.history));
     this.historyDirty = false;
   }
 
-  close() { this.saveHistory(); }
+  async close() {
+    this.saveHistory();
+    if (this.factOwner) forgetFacts(this.factOwner);
+    if (this.factOwner) {
+      const all = panes(), allSpaces = spaces();
+      const owned = Object.values(shared('herd.gridPanes') || {}).map(record => validateGrid(record, record?.pane, all, allSpaces)).filter(Boolean);
+      if (owned.length) {
+        const current = focused()?.pane;
+        const active = owned.find(record => record.pane === current);
+        const focus = active && (all.find(pane => pane.pane === active.focusPane && pane.tab === active.tab)?.pane ||
+          all.find(pane => pane.tab === active.tab && pane.terminal)?.pane) || null;
+        const zooms = owned.filter(record => all.find(pane => pane.pane === record.pane)?.zoomed).map(record => ({ pane: record.pane,
+          target: all.find(pane => pane.pane === record.zoomPane && pane.tab === record.tab)?.pane || record.pane }));
+        // close sees the old layout snapshot. The helper checks fresh native status.
+        // An already started exec survives the closing copy's 250 ms cleanup budget.
+        await exec('node', [appHome() + '/mods/herd/grid-exit.mjs', JSON.stringify({ panes: owned.map(record => record.pane), focus, zooms })], { timeout: 15000 });
+      }
+    }
+    // The receipt belongs to the Core pane, which can outlive this View (layout/reload/quit).
+    // Stale IDs are harmless: every use validates against live panes and the map is bounded.
+  }
+
+  gridState(group) {
+    const target = gridTarget(group, this.livePanes || [], this.liveSpaces || [], this.liveFocus, this.infos?.[group.key]?.info?.conductor);
+    if (!target) return null;
+    const raw = shared('herd.gridPanes')?.[target.tab];
+    const record = raw && validateGrid(raw, raw.pane, this.livePanes || [], this.liveSpaces || []);
+    return { target, record, shown: Boolean(record && record.institution === group.key && this.liveFocus?.tab === record.tab &&
+      this.livePanes?.find(p => p.pane === record.pane)?.zoomed) };
+  }
+
+  openGrid(group, cx) {
+    if (this.gridBusy) return;
+    const fresh = this.snapshot().find(g => g.key === group.key);
+    const state = fresh && this.gridState(fresh);
+    if (!state) return;
+    if (state.shown) { this.returnGrid(state.record, cx); return; }
+    if (state.record && state.record.institution !== group.key) {
+      this.gridError = 'This tab already has a grid. Return to terminals first.'; cx.notify(); return;
+    }
+    this.gridBusy = true; this.gridError = null; cx.notify();
+    cx.spawn(async cx => {
+      try {
+        if (state.record) {
+          if (!this.livePanes.find(p => p.pane === state.record.pane)?.zoomed) await gridApi(exec, 'pane.zoom', { pane: state.record.pane });
+          await gridApi(exec, 'pane.focus', { pane: state.record.pane });
+        } else {
+          const before = new Set(this.livePanes.map(p => p.pane));
+          const target = { ...state.target, token: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) };
+          const created = await gridApi(exec, 'pane.split', { pane: target.anchor, direction: 'right', mod: 'herd', props: { grid: target } });
+          if (before.has(created.pane)) throw new Error('The grid did not receive a new pane.');
+          const records = shared('herd.gridPanes') || {};
+          setShared('herd.gridPanes', Object.fromEntries([...Object.entries(records).slice(-63), [target.tab, { ...target, pane: created.pane }]]));
+          if (!panes().find(p => p.pane === created.pane)?.zoomed) run('pane.zoom', { pane: created.pane });
+        }
+      } catch (error) { this.gridError = String(error.message || 'Could not open the grid.').slice(0, 300); }
+      finally { this.gridBusy = false; cx.notify(); }
+    });
+  }
+
+  returnGrid(record, cx) {
+    if (this.gridBusy) return;
+    const steps = restoreGridPlan(record, panes());
+    if (!steps.length) return;
+    this.gridBusy = true; this.gridError = null; cx.notify();
+    cx.spawn(async cx => {
+      try {
+        for (const step of steps.slice(0, -1)) await gridApi(exec, step.command, step.args);
+      } catch (error) {
+        this.gridBusy = false; this.gridError = String(error.message || 'Could not restore terminals.').slice(0, 300); cx.notify(); return;
+      }
+      this.gridBusy = false;
+      cx.notify();
+      // Closing this copy is the last host call; restore its prior zoom/focus first.
+      run('pane.close', steps.at(-1).args);
+    });
+  }
+
+  openGridSeat(seat, cx) {
+    const pane = panes().find(p => p.pane === seat.pane && p.terminal === seat.address);
+    if (!pane) { this.jump(seat); return; }
+    cx.spawn(async cx => {
+      try {
+        if (!pane.zoomed) await gridApi(exec, 'pane.zoom', { pane: pane.pane });
+        run('pane.focus', { pane: pane.pane });
+      } catch (error) { this.gridError = String(error.message || 'Could not open the seat.').slice(0, 300); cx.notify(); }
+    });
+  }
+
+  gridView(t) {
+    const actual = boundGrid(props()?.grid, shared('herd.gridPanes'), panes(), spaces());
+    if (!actual) return div().size_full().p(24).bg(t.canvas).text_color(t.muted).child('This grid is no longer attached to its institution tab.');
+    this.grid = actual;
+    let group = this.snapshot().find(g => g.key === actual.institution);
+    let seats = gridSeats(group, actual.space);
+    const now = Date.now();
+    this.cache = this.personalView ? consumeFacts(seats, now).cache : {};
+    group = this.snapshot().find(g => g.key === actual.institution);
+    seats = gridSeats(group, actual.space);
+    const history = consumeFacts(seats, now).history;
+    this.history = stateHistory({ ...this.history, ...history }, seats, now);
+    this.historyDirty = true;
+    const columns = Math.min(Math.max(1, seats.length), Math.max(1, Math.floor((this.width - 26) / 334)));
+    const tileWidth = Math.max(180, Math.min(420, (this.width - 40 - (columns - 1) * 14) / columns));
+    return v_flex().id('herd-grid').size_full().min_h(0).p(20).gap(16).bg(t.canvas)
+      .on_size_change((size, cx) => { if (this.width !== size.width) { this.width = size.width; cx.notify(); } })
+      .child(h_flex().gap(12).items_center()
+        .child(v_flex().flex_1().min_w(0).gap(4)
+          .child(div().truncate().text_size(21).font_semibold().text_color(t.foreground).child(group?.name || 'Institution'))
+          .child(div().text_size(11).text_color(t.dim).child(`${seats.length} seats · ${this.personalView ? 'live state and sourced sentences' : 'metadata only'}`)))
+        .child(this.askButton('herd-grid-terminals', 'Terminals', cx => this.returnGrid(actual, cx), t, this.gridBusy)))
+      .when(Boolean(this.gridError), el => el.child(div().text_size(11).text_color(t.blocked).child(this.gridError)))
+      .child(v_flex().id('herd-grid-scroll').flex_1().min_h(0).overflow_y_scrollbar()
+        .when(!seats.length, el => el.child(div().p(12).text_size(13).text_color(t.muted).child('No seats remain in this institution.')))
+        .child(h_flex().gap(14).flex_wrap().items_start().justify_center().children(seats.map(seat => {
+          const quote = this.personalView ? quoteState(seat, this.cache, now, home(), actual.space) : null;
+          const sentence = quote?.kind === 'quote' ? quote.text : seat.statusLine;
+          const age = duration(now - (this.history[seat.address]?.at ?? now));
+          return v_flex().id(`herd-grid-seat-${seat.address}`).w(tileWidth).min_h(240).p(18).gap(12).rounded(12).bg(t.surface).border(1).border_color(t.border)
+            .when(['idle', 'unknown'].includes(seat.status), el => el.opacity(0.68))
+            .hover(el => el.bg(t.hover).opacity(1)).cursor_pointer()
+            .tooltip(`${seat.name} · ${seat.role}\nOpen the actual seat; its grid stays available from the sidebar.`)
+            .on_click((_event, cx) => this.openGridSeat(seat, cx))
+            .child(h_flex().gap(10).items_center()
+              .when(this.personalView, el => el.child(this.face(seat, t, 42).id(`herd-grid-face-${seat.address}`)))
+              .child(v_flex().flex_1().min_w(0).gap(5)
+                .child(div().truncate().text_size(13).font_semibold().text_color(t.foreground).child(`${seat.name}${seat.role ? ' · ' + seat.role : ''}`))
+                .child(h_flex().gap(6).items_center().child(this.stateMark(seat, t)).child(div().text_size(11).text_color(t.muted).child(`${STATE[seat.status]} · ${age}`)))))
+            .when(Boolean(sentence), el => el.child(v_flex().flex_1().gap(7).justify_center()
+              .child(div().id(`herd-grid-sentence-${seat.address}`).text_size(14).text_color(t.foreground).text_center().child(sentence))
+              .child(div().text_size(9.5).text_color(t.dim).text_center().child(quote?.kind === 'quote' ? `screen · ${duration(now - quote.checked)}` : 'reported · terminal metadata'))));
+        }))));
+  }
 
   roots() {
     const value = shared('herd.screenRoots');
@@ -424,6 +572,7 @@ export default class Herd extends View {
   }
 
   card(group, t, now, compact) {
+    const grid = this.gridState(group);
     const source = artifactSource(group, home());
     const artifact = this.personalView && source && pathKey(this.infos?.[group.key]?.cwd) === pathKey(source) ? this.artifacts?.[group.key] : null;
     const counts = ['blocked', 'working', 'done'].map(status => {
@@ -440,7 +589,10 @@ export default class Herd extends View {
         .tooltip(`${group.name}${group.machine ? ' · ' + group.machine : ''}\n${summary}`)
         .on_click(() => this.jump(lead))
         .child(div().flex_1().min_w(0).truncate().font_semibold().text_size(compact ? 10 : 13).text_color(group.quiet ? t.muted : t.foreground).child(compact ? group.name.slice(0, 2) : group.name))
-        .when(!compact, el => el.child(div().text_size(10).text_color(t.dim).child(String(group.seats.length)))))
+        .when(!compact, el => el.child(div().text_size(10).text_color(t.dim).child(String(group.seats.length))))
+        .when(Boolean(grid), el => el.child(this.askButton(`herd-grid-open-${group.key}`, grid?.shown ? 'Terminals' : 'Grid', cx => {
+          cx.stop_propagation(); this.openGrid(group, cx);
+        }, t, this.gridBusy))))
       .when(!compact, el => el.child(div().px(5).pb(4).text_size(10).text_color(t.dim).child(summary)))
       .when(!compact && Boolean(artifact), el => el.child(div().id(`herd-artifact-${group.key}`).px(5).py(4).cursor_pointer()
         .tooltip(`${artifact.path}\nCommit ${artifact.commit}\nOpen cached preview`)
@@ -463,6 +615,7 @@ export default class Herd extends View {
 
   render() {
     const t = theme();
+    if (this.gridRequested) return this.gridView(t);
     if (this.askList) return this.askListView(t);
     if (this.preview) return this.previewView(t);
     const groups = this.snapshot();
@@ -472,6 +625,7 @@ export default class Herd extends View {
     if (JSON.stringify(next) !== JSON.stringify(this.history)) {
       this.history = next;
       this.historyDirty = true;
+      if (this.factOwner) publishFacts(this.factOwner, this.personalView ? this.cache : {}, this.history, now);
     }
     const prompts = this.personalView ? currentPrompts(seats, this.cache, now, home(), this.roots()) : [];
     const localGroups = groups.filter(group => !group.outsidePin);
@@ -489,6 +643,7 @@ export default class Herd extends View {
       .child(h_flex().px(compact ? 7 : 16).pt(14).pb(10).items_center().gap(8)
         .child(div().flex_1().text_size(compact ? 11 : 15).font_semibold().text_color(t.foreground).child('Herd'))
         .when(!compact, el => el.child(div().max_w(180).truncate().text_size(10).text_color(t.dim).child(this.spaceName || `${localGroups.length} institutions`))))
+      .when(Boolean(this.gridError), el => el.child(div().px(16).pb(6).text_size(10.5).text_color(t.blocked).child(this.gridError)))
       .when(!compact && outsidePins.length > 0, el => el.child(h_flex().px(12).pb(7).gap(5).flex_wrap().items_center()
         .child(div().text_size(9).text_color(t.dim).child('Pinned'))
         .children(outsidePins.map(seat => div().id(`herd-pin-${seat.address}`).px(5).py(3).rounded(4).bg(t.surface).text_size(10).text_color(t.muted)

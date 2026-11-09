@@ -45,6 +45,15 @@ seats from another space stay reachable above the cards. Work uses labels, state
 terminal metadata only. It shows no familiar faces and runs no metadata, Git, artifact, screen or model readers.
 Personal previews, prompt checks and asks are active only in a personal space. No institution names are built in.
 
+Each institution has a **Grid** button. It opens its seats as native tiles in that institution's tab: familiar,
+name and role, state and observed time, and a sourced sentence when available. Quiet seats remain visible and state
+changes do not reorder the tiles. Click a tile to bring the actual terminal forward; Grid brings the tiles back.
+**Terminals** restores the previous focus, zoom and split layout, removing only the extra grid pane. No terminal
+is recreated or stopped. Grid copies reuse the sidebar's in-memory facts and start no readers. Work grids show
+metadata without faces or screen quotes. The ordinary seats-main layout remains the fallback.
+Switching to seats-main removes the temporary grid panes and returns to the real terminals. It keeps terminal
+processes and IDs; the explicit Terminals button also restores the saved zoom and split layout.
+
 The installer includes it while keeping `seats-main` as the default. To try it after installation:
 
 ```sh
