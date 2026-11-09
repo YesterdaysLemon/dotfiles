@@ -28,11 +28,17 @@ institution identity and local scope; `artifact-reader.mjs` reads the newest com
 caches bounded committed PNGs under the application home's `herd-cache/`. Node and Git provide the optional artifact reader; no npm packages or image decoder are required. Keep cache files out of Git. No automatic LFS fetch, shell config parsing in the mod,
 uncommitted-image fallback, Work/remote reads or default layout activation. Run the Node checks.
 
-`asks.mjs` validates the read-only `seats asks --to al --all --json` response. No answer, withdrawal or notification
-command belongs in this mod. Preserve the last successful list with a stale indicator on refresh failure.
+`asks.mjs` validates `seats asks --to al --all --open --json`. Clicking any teaser opens the full inbox, grouped by
+institution. Explicit operator clicks can answer through an args array, with the owning personal project and
+`--from al`. Disable the card while sending; only exit 0 plus the exact stdout ID confirms sent. Never treat a
+timeout as success. Test writes only against scratch fixture ledgers, never real asks. The kit routes notifications.
+`answer-runner.mjs` uses Node to preserve arbitrary text; Windows invokes the installed Bash seats script through
+Git Bash with an args array, bypassing cmd.exe's multiline restriction. Never interpolate answers into shell code.
+Preserve the last list with a stale indicator on refresh failure. Ask evidence uses only explicitly named committed
+PNG paths within the owning project, through the existing bounded reader and app-home cache; no writes under mods/.
 
 `sentences.mjs` recognizes bounded literal Codex assistant prose. It skips queued input, menus, tool bodies,
-credential-like assignments and ambiguous frames. A missing/expired quote stays visibly unavailable; never invent
+credential-like assignments and ambiguous frames. A missing/expired quote stays unavailable on hover only; never invent
 a summary or derive it from a stale terminal title. Test scope/program/pane changes, read-budget sharing, no quote
 persistence, and a real isolated native view. No model, network or additional runtime dependency is used.
 

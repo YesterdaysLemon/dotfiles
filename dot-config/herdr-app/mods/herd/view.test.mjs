@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import * as model from './model.mjs';
 import * as artifacts from './artifacts.mjs';
 import * as asks from './asks.mjs';
@@ -31,16 +35,19 @@ function find(node, id) {
   return null;
 }
 
-function harness(storage = new Map(), execute = async () => ({ code: 1 })) {
+function harness(storage = new Map(), execute = async () => ({ code: 1 }), userHome = 'C:/Users/example') {
   const calls = [];
+  const sharedState = new Map();
+  const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {} }) };
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
-    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt',
+    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'answerCommand', 'acceptedAnswer', 'askImages',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
-  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'run', 'theme', 'shared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'window', 'hc', ...names, source)(
+  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'window', 'hc', ...names, source)(
     class {}, element, element, element, element, element,
-    (...args) => calls.push(args), () => new Proxy({}, { get: (_, key) => String(key) }), () => [], () => 'C:/Users/example',
+    { new: element }, InputState,
+    (...args) => calls.push(args), () => new Proxy({}, { get: (_, key) => String(key) }), key => sharedState.get(key), (key, value) => sharedState.set(key, value), () => userHome,
     { setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) ?? null },
     () => ({}), execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]),
     () => ({ platform: 'linux' }),
@@ -48,14 +55,15 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 })) {
     ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences })[name]),
   );
   const view = new Herd();
-  const seat = { address: 't1', pane: 'p1', name: 'Sample', role: 'maker', status: 'idle', cwd: 'C:/Users/example/Project/sample', institution: 'sample' };
+  const seat = { address: 't1', pane: 'p1', name: 'Sample', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample', institution: 'sample' };
   view.snapshot = () => [{ key: 'sample', name: 'Sample institution', workspace: 'sample', status: 'idle', quiet: true, seats: [seat] }];
   view.history = {};
   view.personalView = true;
   view.width = 340;
   view.lastCheck = Date.now();
+  view.answerStates = {}; view.askInputs = {}; view.evidence = {};
   view.cache = { t1: { checked: Date.now(), cwd: model.pathKey(seat.cwd), prompt: { id: 'claude-trust', title: 'Folder trust', key: 'Enter', quote: 'Do you trust the files in this folder?' } } };
-  return { view, seat, calls, storage };
+  return { view, seat, calls, storage, sharedState };
 }
 
 test('quiet seats remain visible, dimmed and clickable; rendering sends no terminal actions', () => {
@@ -136,7 +144,7 @@ test('asks refresh invokes only the aggregate reader, and ask clicks open detail
   let task;
   view.refreshAsks({ spawn: body => { task = body({ notify() {} }); } });
   await task;
-  assert.deepEqual(commands[0].slice(0, 2), ['seats', ['--project', seat.cwd, 'asks', '--to', 'al', '--all', '--json']]);
+  assert.deepEqual(commands[0].slice(0, 2), ['seats', ['--project', seat.cwd, 'asks', '--to', 'al', '--all', '--open', '--json']]);
   assert.equal(view.asks.length, 1);
   find(view.render(), 'herd-ask-' + ask.id).click();
   assert.equal(calls.length, 1);
@@ -246,9 +254,94 @@ test('an expired quote is removed from the row and its tooltip without schedulin
   view.cache = { t1: { checked: Date.now() - model.CACHE_MS - 1, cwd: model.pathKey(seat.cwd), app: sentences.screenIdentity(seat),
     pane: seat.pane, space: seat.space, quote: { text: 'I am checking the expired fixture.' }, error: false } };
   const tree = view.render({ spawn() { assert.fail('render cannot start a read'); }, timer: { after() { assert.fail('render cannot start a timer'); } } });
-  assert.equal(find(tree, 'herd-quote-t1').childNodes[0], 'Screen quote expired');
+  assert.equal(find(tree, 'herd-quote-t1'), null);
+  assert.match(find(tree, 'herd-seat-t1').values.tooltip, /Screen quote expired/);
   assert.ok(!find(tree, 'herd-seat-t1').values.tooltip.includes('expired fixture'));
   assert.deepEqual(calls, []);
+});
+
+test('clicking any teaser opens every ask, grouped by institution, rather than a one-item inbox', () => {
+  const { view, calls } = harness();
+  view.asks = Array.from({ length: 14 }, (_, i) => ({ id: `${i < 7 ? 'studio' : i < 11 ? 'game' : i === 11 ? 'wiki' : 'sample'}:item${i}`,
+    from: 'sample/guide', to: 'al', state: 'open', question: `Question ${i}?`, opened_at: '2026-11-08T12:00:00Z' }));
+  find(view.render(), 'herd-ask-studio:item0').click();
+  assert.equal(calls[0][1].props.askList.length, 14, 'the old callback passed [ask] and displayed 1');
+  assert.deepEqual(asks.askGroups(calls[0][1].props.askList).map(g => [g.owner, g.asks.length]), [['game', 4], ['sample', 2], ['studio', 7], ['wiki', 1]]);
+  view.askList = view.asks;
+  const detail = view.render();
+  for (const ask of view.asks) assert.ok(find(detail, 'herd-ask-' + ask.id));
+});
+
+test('answers write a scratch ledger with exact text once, then require the matching receipt before sent', async t => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'herd-answer-test-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const userHome = root.replace(/\\/g, '/') + '/home', owner = userHome + '/Project/sample';
+  mkdirSync(owner, { recursive: true });
+  const stub = path.join(root, 'seats-stub.cjs'), ledger = path.join(owner, 'asks.jsonl');
+  writeFileSync(stub, `const fs=require('node:fs');const a=process.argv.slice(2);if(a[0]!=='--project'||a[2]!=='answer'||a[3]!=='--from'||a[4]!=='al'||a[5]!=='--')process.exit(3);const event={id:a[6],answer:a[7]};fs.appendFileSync('asks.jsonl',JSON.stringify(event)+'\\n');setTimeout(()=>console.log(event.id),30);`, 'utf8');
+  const commands = [], run = promisify(execFile);
+  const { view, calls, sharedState } = harness(new Map(), async (command, args, options) => {
+    commands.push({ command, args, options });
+    assert.equal(command, 'node');
+    const request = JSON.parse(args[1]);
+    const invocation = asks.answerCommand({ id: request.id, to: 'al', state: 'open', owner_project: request.project }, request.answer, request.home);
+    const result = await run(process.execPath, [stub, ...invocation.args], { cwd: options.cwd, encoding: 'utf8', windowsHide: true });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  }, userHome);
+  const ask = { id: 'sample:fixture', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', owner_project: owner };
+  view.askList = [ask]; view.prepareAskInputs();
+  const note = '-free "text"; $(not-a-command) `literal`\nsecond line';
+  view.askInputs[ask.id].set_value(note);
+  const tasks = [], cx = { notify() {}, spawn(body) { tasks.push(body(cx)); } };
+  view.answerAsk(ask, 'Option A', cx);
+  view.answerAsk(ask, 'Option A', cx);
+  assert.equal(view.answerStates[ask.id].sending, true);
+  assert.equal(commands.length, 1);
+  await Promise.all(tasks);
+  assert.deepEqual(JSON.parse(readFileSync(ledger, 'utf8').trim()), { id: ask.id, answer: 'Option A\n\n' + note });
+  assert.equal(commands[0].options.cwd, owner);
+  assert.equal(view.answerStates[ask.id].sent, ask.from);
+  assert.equal(view.visibleAsks([ask]).length, 0);
+  assert.equal(sharedState.get('herd.askOutcomes')[ask.id], ask.from);
+  assert.deepEqual(calls, [], 'the receipt updates shared visibility without a command that dismisses the dialog');
+  view.answerAsk(ask, 'Option A', cx);
+  assert.equal(commands.length, 1);
+});
+
+test('failed, timed-out and mismatched answer receipts stay visible; Work makes no write', async () => {
+  for (const result of [{ code: 1, stderr: 'Ledger busy' }, { code: 0, stdout: 'sample:other' }, new Error('Timed out')]) {
+    const { view } = harness(new Map(), async () => { if (result instanceof Error) throw result; return result; });
+    const ask = { id: 'sample:fixture', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', owner_project: 'C:/Users/example/Project/sample' };
+    view.askList = [ask]; view.prepareAskInputs(); view.askInputs[ask.id].set_value('Answer');
+    let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+    view.answerAsk(ask, null, cx); await task;
+    assert.ok(view.answerStates[ask.id].error);
+    assert.equal(view.answerStates[ask.id].sent, undefined);
+    assert.equal(view.visibleAsks([ask]).length, 1);
+    view.personalView = false;
+    view.answerAsk(ask, 'Option A', { notify() {}, spawn() { assert.fail('Work cannot write'); } });
+    ask.owner_project = 'C:/Users/example/Work/sample'; view.personalView = true;
+    view.answerAsk(ask, 'Option A', { notify() {}, spawn() { assert.fail('Work owner cannot write'); } });
+  }
+});
+
+test('a missing owner disables answers, and Work starts no evidence reads', async () => {
+  const { view, calls } = harness(new Map(), async () => assert.fail('no reader should run'));
+  const ask = { id: 'sample:fixture', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose docs/sheet.png?', options: ['A'] };
+  view.askList = [ask]; view.prepareAskInputs();
+  const tree = view.render();
+  assert.ok(find(tree, 'herd-ask-' + ask.id));
+  const button = find(tree, 'herd-answer-option-' + ask.id + '-0');
+  assert.equal(button.values.opacity, 0.45);
+  button.click({}, { spawn() { assert.fail('unknown owner cannot send'); } });
+  assert.deepEqual(calls, []);
+  ask.owner_project = 'C:/Users/example/Work/sample';
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.loadEvidence(cx); await task;
+  view.personalView = false;
+  ask.owner_project = 'C:/Users/example/Project/sample';
+  view.loadEvidence(cx); await task;
+  assert.deepEqual(view.evidence, {});
 });
 
 test('a screen moved to Work while its read was in flight never becomes a quote', async () => {

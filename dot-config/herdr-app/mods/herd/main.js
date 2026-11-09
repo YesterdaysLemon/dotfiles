@@ -1,10 +1,10 @@
 // Cloned from seat-agents. Institution-first projection, without a model.
 import { View, div, image, svg } from 'gpui-kit';
-import { v_flex, h_flex } from 'gpui-base';
-import { agents, terminals, panes, spaces, focused, run, theme, shared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window } from 'herdr';
+import { v_flex, h_flex, InputState, Input } from 'gpui-base';
+import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
-import { ASK_TTL, parseAsks, questionExcerpt } from './asks.mjs';
+import { ASK_TTL, parseAsks, questionExcerpt, askGroups, answerCommand, acceptedAnswer, askImages } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
 
@@ -14,7 +14,6 @@ const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states
 export default class Herd extends View {
   init(_props, cx) {
     this.askList = Array.isArray(props()?.askList) ? parseAsks(JSON.stringify(props().askList)) : null;
-    if (this.askList) return;
     this.preview = acceptArtifact(props()?.artifactPreview);
     if (this.preview) return;
     this.history = stored();
@@ -32,12 +31,25 @@ export default class Herd extends View {
     this.asksChecked = 0;
     this.asksError = false;
     this.asksBusy = false;
+    this.askSource = props()?.askSource || null;
+    this.answerStates = {};
+    this.askInputs = {};
+    this.evidence = {};
+    this.evidenceBusy = false;
+    if (this.askList) {
+      this.prepareAskInputs();
+      this.loadEvidence(cx);
+      cx.timer.every(60000, cx => this.refreshAsks(cx));
+      return;
+    }
     this.scan(cx);
     this.refreshMetadata(cx);
     this.refreshAsks(cx);
     cx.spawn(async cx => {
       for (;;) {
-        if (await nextCommand() === 'refresh') { this.scan(cx); this.refreshMetadata(cx); this.refreshAsks(cx); }
+        const command = await nextCommand();
+        if (command === 'refresh') { this.scan(cx); this.refreshMetadata(cx); this.refreshAsks(cx); }
+        if (command === 'refresh-asks') { this.asksChecked = 0; this.refreshAsks(cx); }
       }
     });
     // Persist observed state outside render. These are data/clock timers, not animation.
@@ -51,7 +63,7 @@ export default class Herd extends View {
     if (this.asksBusy || (this.asksChecked && Date.now() - this.asksChecked < ASK_TTL)) return;
     const groups = this.snapshot();
     if (!this.personalView) return;
-    const project = groups.map(group => {
+    const project = this.askList && personalFolder(this.askSource, home()) ? this.askSource : groups.map(group => {
       const source = artifactSource(group, home());
       return source ? this.infos?.[group.key]?.info?.project || source : null;
     }).find(Boolean);
@@ -59,9 +71,12 @@ export default class Herd extends View {
     this.asksBusy = true;
     cx.spawn(async cx => {
       try {
-        const result = await exec(seatsExecutable(window()?.platform), ['--project', project, 'asks', '--to', 'al', '--all', '--json'], { timeout: 30000 });
+        const result = await exec(seatsExecutable(window()?.platform), ['--project', project, 'asks', '--to', 'al', '--all', '--open', '--json'], { timeout: 30000 });
         if (result.code !== 0) throw new Error('asks unavailable');
-        this.asks = parseAsks(result.stdout);
+        const items = parseAsks(result.stdout).filter(ask => !ask.owner_project || personalFolder(ask.owner_project, home()));
+        if (this.askList) { this.askList = items; this.prepareAskInputs(); this.loadEvidence(cx); }
+        else this.asks = items;
+        this.askSource = project;
         this.asksChecked = Date.now();
         this.asksError = false;
       } catch { this.asksError = true; } // Retain the last successful list, visibly marked stale.
@@ -135,37 +150,135 @@ export default class Herd extends View {
     openOverlay({ mod: 'herd', kind: 'dialog', width: 820, height: 650, props: { artifactPreview: artifact } });
   }
 
-  showAsks(items = this.asks) {
-    openOverlay({ mod: 'herd', kind: 'dialog', width: 740, height: 700, props: { askList: items } });
+  visibleAsks(items = this.asks) {
+    const sent = shared('herd.askOutcomes') || {};
+    return (items || []).filter(ask => !sent[ask.id] && !this.answerStates?.[ask.id]?.sent);
+  }
+
+  showAsks() {
+    openOverlay({ mod: 'herd', kind: 'dialog', width: 800, height: 650, props: { askList: this.visibleAsks(), askSource: this.askSource } });
+  }
+
+  prepareAskInputs() {
+    for (const ask of this.askList || []) if (!this.askInputs[ask.id]) {
+      const input = InputState.new({ placeholder: ask.options?.length ? 'Optional note, or write your own answer' : 'Your answer' });
+      input.on('change', (_event, cx) => cx.notify());
+      this.askInputs[ask.id] = input;
+    }
+  }
+
+  answerAsk(ask, option, cx) {
+    if (this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.sent || !this.visibleAsks([ask]).length) return;
+    this.snapshot();
+    if (!this.personalView) return;
+    const note = this.askInputs?.[ask.id]?.value().trim() || '';
+    let command;
+    try { command = answerCommand(ask, option ? option + (note ? '\n\n' + note : '') : note, home()); }
+    catch (error) { this.answerStates[ask.id] = { error: error.message }; cx.notify(); return; }
+    this.answerStates[ask.id] = { sending: true }; // Synchronous guard before spawning: rapid clicks cannot duplicate a write.
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const result = await exec('node', [appHome() + '/mods/herd/answer-runner.mjs', JSON.stringify({ project: command.cwd, id: ask.id,
+          answer: command.args.at(-1), home: home() })], { cwd: command.cwd, timeout: 30000 });
+        if (!acceptedAnswer(result, ask.id)) throw new Error(result.stderr?.trim().slice(0, 400) || 'No matching answer receipt. Refresh before trying again.');
+        this.answerStates[ask.id] = { sent: ask.from };
+        const outcomes = shared('herd.askOutcomes') || {};
+        setShared('herd.askOutcomes', Object.fromEntries([...Object.entries(outcomes).slice(-99), [ask.id, ask.from]]));
+        this.asksChecked = 0;
+      } catch (error) { this.answerStates[ask.id] = { error: String(error.message || 'No answer receipt; refresh before trying again.').slice(0, 400) }; }
+      finally { cx.notify(); }
+    });
+  }
+
+  loadEvidence(cx) {
+    if (this.evidenceBusy || !this.askList) return;
+    this.evidenceBusy = true;
+    cx.spawn(async cx => {
+      try {
+        for (const ask of this.askList) {
+          this.snapshot();
+          if (!this.personalView) break;
+          if (!personalFolder(ask.owner_project, home())) continue;
+          for (const path of askImages(ask)) {
+            const key = `${ask.id}|${ask.owner_project}|${path}`;
+            if (this.evidence[key]) continue;
+            let preview = null;
+            try {
+              const result = await exec('node', [appHome() + '/mods/herd/artifact-reader.mjs', '--repo', ask.owner_project, '--path', path,
+                '--home', home(), '--app-home', appHome()], { timeout: 15000 });
+              if (result.code === 0) preview = acceptArtifact(JSON.parse(result.stdout));
+            } catch { /* Missing/uncommitted images stay unavailable. */ }
+            this.snapshot();
+            if (!this.personalView) return;
+            this.evidence[key] = preview || { status: 'unavailable' };
+            cx.notify();
+          }
+        }
+      } finally { this.evidenceBusy = false; cx.notify(); }
+    });
+  }
+
+  askButton(id, label, action, t, disabled = false, recommended = false) {
+    return div().id(id).px(10).py(7).rounded(6).border(1).border_color(recommended ? t.accent : t.input)
+      .bg(t.surface).text_size(11.5).text_color(t.foreground).opacity(disabled ? 0.45 : 1)
+      .when(!disabled, el => el.cursor_pointer().hover(el => el.bg(t.hover)))
+      .on_click((_event, cx) => { if (!disabled) action(cx); }).child(label);
   }
 
   askRow(ask, t, detail = false) {
+    const writable = this.personalView && personalFolder(ask.owner_project, home());
     return v_flex().id(`herd-ask-${ask.id}`).p(detail ? 12 : 8).gap(5).rounded(7).bg(t.raised)
-      .when(!detail, el => el.cursor_pointer().hover(el => el.bg(t.hover)).on_click(() => this.showAsks([ask])))
+      .when(!detail, el => el.cursor_pointer().hover(el => el.bg(t.hover)).on_click(() => this.showAsks()))
       .child(div().text_size(9.5).text_color(t.dim).child(ask.from))
       .child(div().text_size(detail ? 12 : 10.5).text_color(t.foreground).child(detail ? ask.question : questionExcerpt(ask)))
       .when(detail, el => el
-        .when(Boolean(ask.options?.length), el => el.child(div().text_size(11).text_color(t.muted).child(`Options: ${ask.options?.join(' · ')}`)))
-        .when(Boolean(ask.recommendation), el => el.child(div().text_size(11).text_color(t.muted).child(`Recommended: ${ask.recommendation}`)))
+        .children(askImages(ask).map(path => {
+          const evidence = this.evidence?.[`${ask.id}|${ask.owner_project}|${path}`];
+          return v_flex().gap(3)
+            .when(evidence?.status === 'ready', el => el.child(this.artifactView(evidence, t, Math.max(180, this.width - 64), 260, 'Committed image')))
+            .when(evidence?.status !== 'ready', el => el.child(div().text_size(10).text_color(t.dim).child(`${path} · ${evidence ? 'preview unavailable' : 'loading preview…'}`)));
+        }))
         .when(Boolean(ask.blocks), el => el.child(div().text_size(11).text_color(t.muted).child(`Waiting: ${ask.blocks}`)))
+        .when(Boolean(ask.recommendation && !ask.options?.length), el => el.child(div().text_size(11).text_color(t.muted).child(`Recommended: ${ask.recommendation}`)))
+        .when(Boolean(this.askInputs?.[ask.id]), el => el.child(Input.new(this.askInputs[ask.id]).id(`herd-answer-input-${ask.id}`).h(36).px(9).rounded(6).border(1).border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)
+          .disabled(Boolean(this.answerStates?.[ask.id]?.sending || !writable))))
+        .child(h_flex().gap(6).flex_wrap().children((ask.options || []).map((option, index) => this.askButton(`herd-answer-option-${ask.id}-${index}`,
+          option + (option === ask.recommendation ? ' · recommended' : ''), cx => this.answerAsk(ask, option, cx), t,
+          Boolean(this.answerStates?.[ask.id]?.sending || !writable), option === ask.recommendation)))
+          .child(this.askButton(`herd-answer-send-${ask.id}`, this.answerStates?.[ask.id]?.sending ? 'Sending…' : 'Send answer', cx => this.answerAsk(ask, null, cx), t,
+            Boolean(this.answerStates?.[ask.id]?.sending || !writable || !this.askInputs?.[ask.id]?.value().trim()))))
+        .when(!writable, el => el.child(div().text_size(10.5).text_color(t.muted).child('Read-only: owning personal project unavailable. Refresh to check again.')))
+        .when(Boolean(this.answerStates?.[ask.id]?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(this.answerStates[ask.id].error)))
         .child(div().text_size(9.5).text_color(t.dim).child(ask.id)));
   }
 
   askListView(t) {
+    this.snapshot();
+    const items = this.personalView ? this.visibleAsks(this.askList) : [];
     return v_flex().size_full().min_h(0).p(16).gap(12).bg(t.surface)
+      .on_size_change((size, cx) => { if (this.width !== size.width) { this.width = size.width; cx.notify(); } })
       .child(h_flex().items_center().justify_between()
-        .child(div().text_size(14).font_semibold().text_color(t.foreground).child(`Asks to you · ${this.askList.length}`))
+        .child(div().text_size(14).font_semibold().text_color(t.foreground).child(`Asks to you · ${items.length}`))
         .child(div().id('herd-close-asks').p(6).text_color(t.muted).cursor_pointer().on_click(() => closeOverlay(props().overlay)).child('Close')))
-      .child(v_flex().id('herd-ask-details').flex_1().min_h(0).gap(9).overflow_y_scrollbar().children(this.askList.map(ask => this.askRow(ask, t, true))))
-      .child(div().text_size(10.5).text_color(t.muted).child('Answers go through your liaison.'));
+      .child(h_flex().gap(8).items_center()
+        .child(this.askButton('herd-refresh-asks', this.asksBusy ? 'Refreshing…' : 'Refresh', cx => { this.asksChecked = 0; this.refreshAsks(cx); }, t, this.asksBusy))
+        .when(this.asksError, el => el.child(div().text_size(11).text_color(t.blocked).child('Could not refresh · showing last known asks'))))
+      .children(Object.values(this.answerStates || {}).filter(state => state.sent).slice(-3).map(state => div().text_size(11).text_color(t.done).child(`Sent to ${state.sent}`)))
+      .child(v_flex().id('herd-ask-details').flex_1().min_h(0).gap(12).overflow_y_scrollbar()
+        .when(!this.personalView, el => el.child(div().text_size(12).text_color(t.muted).child('Personal asks are available in Project.')))
+        .when(this.personalView && !items.length, el => el.child(div().text_size(12).text_color(t.muted).child('No open asks.')))
+        .children(askGroups(items).map(group => v_flex().gap(8)
+          .child(div().text_size(13).font_semibold().text_color(t.foreground).child(`${group.owner.replace(/[-_]+/g, ' ')} · ${group.asks.length}`))
+          .children(group.asks.map(ask => this.askRow(ask, t, true))))));
   }
 
-  artifactView(artifact, t, width, maxHeight) {
+  artifactView(artifact, t, width, maxHeight, label = 'Latest artifact') {
     const fit = fitArtifact(artifact, width, maxHeight);
     return v_flex().gap(4)
       .child(h_flex().w_full().justify_center().rounded(7).bg(t.canvas).overflow_hidden()
         .child(image(artifact.image).w(fit.width).h(fit.height)))
-      .child(div().text_size(9.5).text_color(t.dim).truncate().child(`Latest artifact · ${artifact.commit.slice(0, 7)}`));
+      .child(div().text_size(9.5).text_color(t.dim).truncate().child(`${label} · ${artifact.commit.slice(0, 7)}`));
   }
 
   previewView(t) {
@@ -300,7 +413,7 @@ export default class Herd extends View {
           .when(seat.promptWait, el => el.child(div().text_size(9).text_color(t.dim).child('screen')))
           .when(seat.fixture, el => el.child(div().text_size(9).text_color(t.dim).child('fixture'))))
         .when(Boolean(seat.statusLine && seat.statusLine !== seat.role && seat.statusLine !== seat.name), el => el.child(div().truncate().text_size(10).text_color(t.dim).tooltip('Self-reported terminal metadata').child(seat.statusLine)))
-        .when(Boolean(sentence), el => el.child(this.sentenceRow(sentence, quoteLabel, quoteTip, seat.address, t, now)))))
+        .when(sentence?.kind === 'quote', el => el.child(this.sentenceRow(sentence, quoteLabel, quoteTip, seat.address, t, now)))))
       .when(!compact, el => el.child(div().text_size(11).text_color(t.dim).child('›')));
   }
 
@@ -363,6 +476,7 @@ export default class Herd extends View {
     const checked = recent.filter(entry => !entry.error).length;
     const unavailable = recent.filter(entry => entry.error).length;
     const pending = eligible.length - recent.length;
+    const inbox = this.visibleAsks();
     const coverage = `${checked} checked${unavailable ? ` · ${unavailable} unavailable` : ''}${pending ? ` · ${pending} pending` : ''}`;
     return v_flex().id('herd-root').size_full().min_h(0).bg(t.chrome)
       .on_size_change((size, cx) => { if (this.width !== size.width) { this.width = size.width; cx.notify(); } })
@@ -389,12 +503,12 @@ export default class Herd extends View {
           .child(v_flex().p(8).gap(4).rounded(9).border(1).border_color(t.border)
             .child(h_flex().justify_between()
               .child(div().text_size(10.5).text_color(t.muted).child('Asks to you'))
-              .child(div().text_size(10).text_color(t.dim).child(String(this.asks?.length ?? 0))))
+              .child(div().text_size(10).text_color(t.dim).child(String(inbox.length))))
             .when(this.asksError, el => el.child(div().text_size(10).text_color(t.muted).child('Could not refresh · showing last known asks')))
             .when(!this.asks?.length && !this.asksError, el => el.child(div().text_size(10.5).text_color(t.dim).child(this.asksChecked ? 'No open asks in the configured institutions.' : 'Loading personal asks…')))
-            .children((this.asks ?? []).slice(0, 2).map(ask => this.askRow(ask, t)))
-            .when(Boolean(this.asks?.length), el => el.child(div().id('herd-all-asks').py(5).text_size(10.5).text_color(t.muted).cursor_pointer()
-              .hover(el => el.text_color(t.foreground)).on_click(() => this.showAsks()).child(`View all ${this.asks.length} asks →`))))))
+            .children(inbox.slice(0, 2).map(ask => this.askRow(ask, t)))
+            .when(Boolean(inbox.length), el => el.child(div().id('herd-all-asks').py(5).text_size(10.5).text_color(t.muted).cursor_pointer()
+              .hover(el => el.text_color(t.foreground)).on_click(() => this.showAsks()).child(`View all ${inbox.length} asks →`))))))
         .when(!groups.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child('No seats are running here yet.')))
         .children((compact ? groups : localGroups).map(group => this.card(group, t, now, compact)))
         .child(div().h(8)))

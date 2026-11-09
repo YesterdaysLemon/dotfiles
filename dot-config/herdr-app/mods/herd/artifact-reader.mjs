@@ -71,8 +71,10 @@ export function pngSize(data) {
   return { width, height };
 }
 
-export function committedImage(repo, pattern, userHome) {
-  const pathspec = ':(glob)' + validateGlob(pattern);
+export function committedImage(repo, pattern, userHome, exact = false) {
+  validateGlob(pattern);
+  if (exact && (/[?*\[\]]/.test(pattern) || pattern.split('/').some(part => !part || part === '.'))) fail('invalid-path');
+  const pathspec = (exact ? ':(literal)' : ':(glob)') + pattern;
   const commit = git(repo, 'log', '-1', '--format=%H', '--', pathspec).toString('ascii').trim();
   if (!/^[0-9a-f]{40,64}$/.test(commit)) fail('no-match');
   const paths = [...new Set(git(repo, 'diff-tree', '-m', '--root', '-r', '--no-commit-id', '--name-only', '--diff-filter=AM', '-z', commit, '--', pathspec)
@@ -143,10 +145,11 @@ async function cacheAccess(cache, lock, body) {
   } finally { if (regular(owner)) fs.unlinkSync(owner); fs.rmdirSync(lock); }
 }
 
-export async function artifact(folder, pattern, userHome, appHome) {
+export async function artifact(folder, pattern, userHome, appHome, exact = false) {
   userHome = fs.realpathSync(userHome);
   const repo = localRepository(folder, userHome);
-  const { data, commit, relative, width, height } = committedImage(repo, pattern, userHome);
+  if (exact && path.resolve(folder) !== path.resolve(repo)) fail('owner-root-required');
+  const { data, commit, relative, width, height } = committedImage(repo, pattern, userHome, exact);
   if (data.length > CACHE_BYTES) fail('cache-full');
   appHome = fs.realpathSync(appHome);
   const cache = path.join(appHome, 'herd-cache');
@@ -176,8 +179,8 @@ export async function artifact(folder, pattern, userHome, appHome) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const { values } = parseArgs({ options: { repo: { type: 'string' }, glob: { type: 'string' }, home: { type: 'string' }, 'app-home': { type: 'string' } } });
-    if (Object.values(values).length !== 4) fail('invalid-arguments');
-    console.log(JSON.stringify(await artifact(values.repo, values.glob, values.home, values['app-home'])));
+    const { values } = parseArgs({ options: { repo: { type: 'string' }, glob: { type: 'string' }, path: { type: 'string' }, home: { type: 'string' }, 'app-home': { type: 'string' } } });
+    if (Object.values(values).length !== 4 || Boolean(values.glob) === Boolean(values.path)) fail('invalid-arguments');
+    console.log(JSON.stringify(await artifact(values.repo, values.path || values.glob, values.home, values['app-home'], Boolean(values.path))));
   } catch (error) { console.log(JSON.stringify({ status: 'empty', reason: error.message || 'unavailable' })); }
 }

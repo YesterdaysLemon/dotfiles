@@ -51,6 +51,16 @@ test('a deletion-only newest commit leaves the slot empty instead of reviving an
   await assert.rejects(f.read('missing/*.png'), /no-match/);
 });
 
+test('ask evidence selects exactly the named committed PNG inside the owning repository', async t => {
+  const f = fixture(t);
+  f.write('docs/a.png'); f.write('docs/z.png'); const commit = f.commit('docs/a.png', 'docs/z.png');
+  f.write('docs/z.png', 'uncommitted replacement');
+  const result = await artifact(f.repo, 'docs/z.png', f.home, f.app, true);
+  assert.equal(result.path, 'docs/z.png'); assert.equal(result.commit, commit); assert.equal(result.sha256, digest(png));
+  for (const value of ['docs/*.png', '../outside.png', '/outside.png', 'docs/[az].png']) await assert.rejects(artifact(f.repo, value, f.home, f.app, true));
+  await assert.rejects(artifact(path.join(f.repo, 'docs'), 'z.png', f.home, f.app, true), /owner-root-required/);
+});
+
 test('LFS reads only verified local objects or matching hydrated bytes and never fetches', async t => {
   const f = fixture(t), sha = digest(png);
   f.write('approved/sheet.png', `version https://git-lfs.github.com/spec/v1\noid sha256:${sha}\nsize ${png.length}\n`);

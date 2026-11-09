@@ -90,12 +90,16 @@ Test it with `node --test dot-config/herdr-app/mods/herd/artifact-reader.test.mj
 Git must support `--no-lazy-fetch` (verified here with Git 2.51); unsupported versions leave the slot empty instead
 of allowing a partial clone to fetch image objects implicitly.
 
-The asks lane reads `seats asks --to al --all --json` from a personal institution, using the kit's configured routes.
-It shows open questions and opens their full options, recommendations and blockers in a read-only list. It never
-answers, withdraws, delegates or sends notifications. A failed refresh keeps the last successful list marked stale;
-it does not become an all-clear. The strip stays compact, with a View all control for the full list. Each config's
-ledger changes trigger a refresh, with a slow polling fallback. The underlying snapshots are per institution,
-not a globally atomic view.
+The asks lane reads `seats asks --to al --all --open --json` from a personal institution, using the kit's configured
+routes. Any teaser opens the complete inbox, grouped by institution, with options, recommendations and what waits
+on each answer. Click an option, optionally adding a note, or send a free answer. Each explicit click runs one args-array
+`seats answer` call as Al in the owning personal project; the kit records and routes it to the asker. The card stays
+disabled while sending. Only exit 0 and the matching ask ID show Sent; errors and timeouts remain visible for review.
+Answering requires Node; on Windows the launcher passes arguments to the installed Bash seats script through Git Bash,
+so multiline notes and shell metacharacters remain literal. Missing owner metadata leaves the ask read-only.
+Named committed PNGs appear inline through the same bounded app-home cache, with no writes under mods. Work stays out.
+A failed refresh keeps the last list marked stale. Confirmed sends disappear across open views; no answers or drafts
+are persisted in mod state. Config watchers plus slow polling refresh the per-institution snapshots; they are not globally atomic.
 
 ## raycast extensions
 
