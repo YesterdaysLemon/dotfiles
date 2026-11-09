@@ -151,11 +151,11 @@ export async function artifact(folder, pattern, userHome, appHome) {
   appHome = fs.realpathSync(appHome);
   const cache = path.join(appHome, 'herd-cache');
   const lockRoot = path.join(appHome, 'cache/herd-locks');
+  if (inside(cache, path.resolve(userHome, 'Work'))) fail('invalid-cache');
   for (const part of [cache, path.join(appHome, 'cache'), lockRoot]) {
     if (fs.existsSync(part) && fs.realpathSync(part) !== part) fail('invalid-cache');
     fs.mkdirSync(part, { recursive: true });
   }
-  if (inside(cache, path.resolve(userHome, 'Work'))) fail('invalid-cache');
   const digest = hash(data), output = path.join(cache, digest + '.png');
   // Herdr reloads scripts on mod asset edits. Both cache and locks live outside
   // mods, so neither a new artifact nor a cache hit can reload the script.

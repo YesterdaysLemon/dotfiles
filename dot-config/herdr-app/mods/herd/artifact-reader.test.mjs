@@ -74,6 +74,9 @@ test('scope, linked Git metadata, glob and PNG header bounds fail before source 
   const linked = path.join(f.home, 'Project/linked'); fs.mkdirSync(linked);
   fs.writeFileSync(path.join(linked, '.git'), 'gitdir: ' + path.join(f.home, 'Work'));
   assert.throws(() => localRepository(linked, f.home), /scope/);
+  f.write('approved/sheet.png'); f.commit('approved/sheet.png');
+  await assert.rejects(artifact(f.repo, 'approved/*.png', f.home, path.join(f.home, 'Work')), /invalid-cache/);
+  assert.deepEqual(fs.readdirSync(path.join(f.home, 'Work')), [], 'a rejected cache root is never created under Work');
   f.write('approved/huge.png', Buffer.alloc(MAX_SOURCE_BYTES + 1)); f.commit('approved/huge.png');
   await assert.rejects(f.read(), /source-too-large/);
 });
