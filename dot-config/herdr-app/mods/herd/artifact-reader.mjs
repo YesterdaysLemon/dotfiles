@@ -119,7 +119,7 @@ export function trimCache(cache, maxCount = CACHE_COUNT, maxBytes = CACHE_BYTES)
   }
 }
 
-async function cacheAccess(cache, lock, body) {
+export async function cacheAccess(cache, lock, body) {
   const deadline = Date.now() + 2000;
   for (;;) {
     try { fs.mkdirSync(lock); break; }

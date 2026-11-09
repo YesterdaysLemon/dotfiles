@@ -1,7 +1,7 @@
 // Cloned from seat-agents. Institution-first projection, without a model.
 import { View, div, image, svg } from 'gpui-kit';
 import { v_flex, h_flex, InputState, Input } from 'gpui-base';
-import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window, settings } from 'herdr';
+import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window, settings, writeTextFile } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
 import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages, scriptSpace } from './asks.mjs';
@@ -10,6 +10,7 @@ import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, rec
 import { publishFacts, consumeFacts, forgetFacts } from './facts.mjs';
 import { validateGrid, boundGrid, gridTarget, gridSeats, restoreGridPlan, gridApi } from './grid.mjs';
 import { questionBlocks } from './ask-text.mjs';
+import { cardSignature, acceptCardImage, acceptCardReceipt, cardOptions } from './cards.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
 const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states') || '{}'); } catch { return {}; } };
@@ -19,7 +20,7 @@ export default class Herd extends View {
     this.gridRequested = props()?.grid != null;
     this.albumRequested = props()?.album != null;
     if (this.albumRequested) {
-      this.album = Array.isArray(props().album) ? props().album.slice(0, 12).map(acceptArtifact).filter(Boolean) : [];
+      this.album = Array.isArray(props().album) ? props().album.slice(0, 64).map(value => acceptArtifact(value) || acceptCardImage(value)).filter(Boolean) : [];
       this.albumAt = Math.max(0, Math.min(this.album.length - 1, Number.isInteger(props().albumAt) ? props().albumAt : 0));
       this.albumZoom = 1; this.albumWidth = 1000; this.albumHeight = 720;
       this.albumFocus = cx.focus_handle(); this.albumFocus.focus();
@@ -49,6 +50,7 @@ export default class Herd extends View {
     this.askInputs = {};
     this.evidence = {};
     this.evidenceBusy = false;
+    this.cards = {}; this.cardsBusy = false;
     this.gridBusy = false;
     this.gridError = null;
     if (this.gridRequested) {
@@ -59,6 +61,7 @@ export default class Herd extends View {
     if (this.askList) {
       this.prepareAskInputs();
       this.loadEvidence(cx);
+      this.loadCards(cx);
       cx.timer.every(60000, cx => this.refreshAsks(cx));
       return;
     }
@@ -111,7 +114,7 @@ export default class Herd extends View {
           if (this.answerStates[ask.id]?.sent && !(this.answerStates[ask.id].at > readingAt)) delete this.answerStates[ask.id];
         }
         if (Object.keys(next).length !== Object.keys(outcomes).length) setShared('herd.askOutcomes', next);
-        if (this.askList) { this.askList = items; this.prepareAskInputs(); this.loadEvidence(cx); }
+        if (this.askList) { this.askList = items; this.prepareAskInputs(); this.loadEvidence(cx); this.loadCards(cx); }
         else this.asks = items;
         this.askSource = project;
         this.asksChecked = Date.now();
@@ -306,11 +309,11 @@ export default class Herd extends View {
     }
   }
 
-  answerAsk(ask, option, cx) {
-    if (this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.sent || this.answerStates?.[ask.id]?.closed || !this.visibleAsks([ask]).length) return;
+  answerAsk(ask, option, cx, allowNote = true) {
+    if (this.answerStates?.[ask.id]?.validating || this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.sent || this.answerStates?.[ask.id]?.closed || !this.visibleAsks([ask]).length) return;
     this.snapshot();
     if (!this.personalView) return;
-    const note = this.askInputs?.[ask.id]?.value().trim() || '';
+    const note = allowNote ? this.askInputs?.[ask.id]?.value().trim() || '' : '';
     let command;
     const pending = this.answerStates?.[ask.id]?.unconfirmed;
     try { command = answerCommand(ask, pending || (option ? option + (note ? '\n\n' + note : '') : note), home()); }
@@ -415,6 +418,118 @@ export default class Herd extends View {
     });
   }
 
+  async checkCard(ask, expectedImages = null) {
+    this.snapshot();
+    if (!this.personalView || !personalFolder(ask.owner_project, home())) throw new Error('Owning personal project unavailable.');
+    const file = appHome() + '/.herd-card-request-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) + '.json';
+    const helper = appHome() + '/mods/herd/card-runner.mjs';
+    try {
+      await writeTextFile(file, JSON.stringify({ project: ask.owner_project, card: ask.card, options: ask.options || [],
+        recommendation: ask.recommendation || null, expectedImages }), null);
+      const result = await exec('node', [helper, 'check', home(), appHome(), file], { timeout: 100000 });
+      if (result.code !== 0) throw new Error(result.stderr?.trim().slice(0, 400) || 'Card validation unavailable.');
+      const card = acceptCardReceipt(JSON.parse(result.stdout));
+      this.snapshot();
+      if (!this.personalView) throw new Error('Cards are unavailable in Work.');
+      return card;
+    } finally {
+      // Also runs after a timeout, which may have killed the checker's finally block.
+      const clean = await exec('node', [helper, 'clean', home(), appHome(), file], { timeout: 10000 });
+      if (clean.code !== 0) throw new Error('Temporary card request cleanup failed.');
+    }
+  }
+
+  loadCards(cx) {
+    if (this.cardsBusy || !this.askList) return;
+    this.snapshot(); if (!this.personalView) return;
+    this.cardsBusy = true;
+    cx.spawn(async cx => {
+      try {
+        for (const ask of this.askList.filter(ask => ask.card)) {
+          this.snapshot(); if (!this.personalView) break;
+          const key = cardSignature(ask), old = this.cards[ask.id];
+          if (old?.key === key && Date.now() - old.checked < ASK_TTL) continue;
+          this.cards[ask.id] = { key, busy: true }; cx.notify();
+          try {
+            const value = await this.checkCard(ask);
+            this.snapshot();
+            if (this.personalView && this.askList.some(current => current.id === ask.id && cardSignature(current) === key)) {
+              this.cards[ask.id] = { key, checked: Date.now(), ...value };
+            }
+          } catch (error) { this.cards[ask.id] = { key, checked: Date.now(), error: String(error.message).slice(0, 400) }; }
+          cx.notify();
+        }
+      } finally { this.cardsBusy = false; cx.notify(); }
+    });
+  }
+
+  answerCard(ask, option, cx) {
+    const state = this.answerStates[ask.id], old = this.cards?.[ask.id];
+    if (!old?.card || state?.validating || state?.sending || state?.unconfirmed || state?.closed || !this.visibleAsks([ask]).length) return;
+    if (!ask.options?.includes(option) || !cardOptions(old.card)?.options.some(item => item.label === option)) return;
+    this.answerStates[ask.id] = { validating: true }; cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const value = await this.checkCard(ask, old.images);
+        const choices = cardOptions(value.card);
+        if (!choices?.options.some(item => item.label === option)) throw new Error('This option is no longer available.');
+        this.cards[ask.id] = { key: cardSignature(ask), checked: Date.now(), ...value };
+        this.answerStates[ask.id] = {};
+        this.answerAsk(ask, option, cx, choices.allowNote === true);
+      } catch (error) { this.answerStates[ask.id] = { error: String(error.message).slice(0, 400) }; }
+      finally { cx.notify(); }
+    });
+  }
+
+  openCardAlbum(ask, path, cx) {
+    const old = this.cards?.[ask.id];
+    if (!old?.card || old.opening) return;
+    old.opening = true; cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const value = await this.checkCard(ask, old.images);
+        this.cards[ask.id] = { key: cardSignature(ask), checked: Date.now(), ...value };
+        this.snapshot();
+        if (this.personalView && value.images.length) openOverlay({ mod: 'herd', kind: 'dialog', width: 0.94, height: 0.92,
+          props: { album: value.images, albumAt: Math.max(0, value.images.findIndex(image => image.path === path)) } });
+      } catch (error) { old.error = String(error.message).slice(0, 400); }
+      finally { old.opening = false; cx.notify(); }
+    });
+  }
+
+  cardView(ask, state, t) {
+    if (!state?.card) return div().text_size(11).text_color(state?.error ? t.blocked : t.muted)
+      .child(state?.error ? `Card unavailable: ${state.error}` : 'Checking card…');
+    const blocked = Boolean(!this.personalView || !personalFolder(ask.owner_project, home()) || this.answerStates[ask.id]?.validating ||
+      this.answerStates[ask.id]?.sending || this.answerStates[ask.id]?.unconfirmed || this.answerStates[ask.id]?.closed);
+    const picture = (path, caption) => {
+      const image = state.images.find(image => image.path === path);
+      return v_flex().gap(4).when(Boolean(image), el => el.child(this.artifactView(image, t, Math.max(100, this.width / (Number(settings().zoom) || 1) - 90), 220,
+        caption || 'Card image', cx => this.openCardAlbum(ask, path, cx))));
+    };
+    const node = id => {
+      const element = state.card.elements[id], p = element.props;
+      if (element.type === 'stack') return v_flex().gap(12).children(element.children.map(node));
+      if (element.type === 'text') return div().when(p.tone === 'strong', el => el.font_semibold())
+        .child(this.questionView(p.text, p.tone === 'muted' ? {...t,foreground:t.muted} : t));
+      if (element.type === 'image') return picture(p.path, p.caption);
+      if (element.type === 'options') return v_flex().gap(8).children(p.options.map((option, index) => v_flex().gap(6).p(8).rounded(7).border(1).border_color(t.input)
+        .when(Boolean(option.image), el => el.child(picture(option.image, option.label)))
+        .child(this.askButton(`herd-card-option-${ask.id}-${index}`, option.label + (option.label === p.recommended ? ' · recommended' : ''),
+          cx => this.answerCard(ask, option.label, cx), t, blocked, option.label === p.recommended))
+        .when(Boolean(option.detail), el => el.child(div().text_size(11).text_color(t.muted).child(option.detail)))));
+      if (element.type === 'table') return div().min_w(0).overflow_x_scrollbar().child(v_flex().gap(5).w(Math.max(200, p.columns.length * 120))
+        .children([p.columns, ...p.rows].map((row, index) => h_flex().gap(8).when(index === 0, el => el.font_semibold())
+          .children(row.map(cell => div().flex_1().min_w(0).text_size(11).text_color(t.foreground).child(cell))))));
+      if (element.type === 'progress') return v_flex().gap(5)
+        .child(div().text_size(11).text_color(t.muted).child(`${p.label || 'Progress'} · ${p.value} / ${p.max}`))
+        .child(div().h(7).rounded(4).bg(t.input).child(div().h(7).rounded(4).bg(t.accent).w(Math.max(0, (this.width / (Number(settings().zoom) || 1) - 90) * p.value / p.max))));
+      return div().child('Unsupported card element.');
+    };
+    return v_flex().id(`herd-card-${ask.id}`).min_w(0).gap(8).p(10).rounded(8).border(1).border_color(t.border)
+      .child(node(state.card.root)).when(Boolean(state.error), el => el.child(div().text_size(11).text_color(t.blocked).child(state.error)));
+  }
+
   askButton(id, label, action, t, disabled = false, recommended = false) {
     return div().id(id).px(10).py(7).rounded(6).border(1).border_color(recommended ? t.accent : t.input)
       .bg(t.surface).text_size(11.5).text_color(t.foreground).opacity(disabled ? 0.45 : 1)
@@ -424,6 +539,7 @@ export default class Herd extends View {
 
   askRow(ask, t, detail = false) {
     const writable = this.personalView && personalFolder(ask.owner_project, home());
+    const card = this.cards?.[ask.id]?.key === cardSignature(ask) ? this.cards[ask.id] : null;
     const asker = askerProfile(ask, this.askerGroups || [], home(), this.personalView, this.infos);
     return v_flex().id(`herd-ask-${ask.id}`).p(detail ? 12 : 8).gap(5).rounded(7).bg(t.raised)
       .when(!detail, el => el.cursor_pointer().hover(el => el.bg(t.hover)).on_click(() => this.showAsks()))
@@ -434,6 +550,7 @@ export default class Herd extends View {
           .when(Boolean(asker), el => el.child(div().truncate().text_size(9).text_color(t.dim).child(ask.from)))))
       .child(detail ? this.questionView(ask.question, t) : div().text_size(10.5).text_color(t.foreground).child(questionExcerpt(ask)))
       .when(detail, el => el
+        .when(Boolean(ask.card), el => el.child(this.cardView(ask, card, t)))
         .children(askImages(ask).map(path => {
           const evidence = this.evidence?.[`${ask.id}|${ask.owner_project}|${path}`];
           return v_flex().id(`herd-evidence-${ask.id}-${path}`).gap(3)
@@ -449,12 +566,12 @@ export default class Herd extends View {
         .when(Boolean(this.scriptStates?.[ask.id]?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(this.scriptStates[ask.id].error)))
         .when(Boolean(ask.recommendation && !ask.options?.length), el => el.child(div().text_size(11).text_color(t.muted).child(`Recommended: ${ask.recommendation}`)))
         .when(Boolean(this.askInputs?.[ask.id]), el => el.child(Input.new(this.askInputs[ask.id]).id(`herd-answer-input-${ask.id}`).h(36).px(9).rounded(6).border(1).border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)
-          .disabled(Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable))))
-        .child(h_flex().gap(6).flex_wrap().children((ask.options || []).map((option, index) => this.askButton(`herd-answer-option-${ask.id}-${index}`,
+          .disabled(Boolean(this.answerStates?.[ask.id]?.validating || this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable))))
+        .child(h_flex().gap(6).flex_wrap().children((card?.card && cardOptions(card.card) ? [] : ask.options || []).map((option, index) => this.askButton(`herd-answer-option-${ask.id}-${index}`,
           option + (option === ask.recommendation ? ' · recommended' : ''), cx => this.answerAsk(ask, option, cx), t,
-          Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable), option === ask.recommendation)))
+          Boolean(this.answerStates?.[ask.id]?.validating || this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable), option === ask.recommendation)))
           .child(this.askButton(`herd-answer-send-${ask.id}`, this.answerStates?.[ask.id]?.checking ? 'Checking delivery…' : this.answerStates?.[ask.id]?.sending ? 'Sending…' : this.answerStates?.[ask.id]?.unconfirmed ? 'Check delivery' : 'Send answer', cx => this.answerAsk(ask, null, cx), t,
-            Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.closed || !writable || (!this.answerStates?.[ask.id]?.unconfirmed && !this.askInputs?.[ask.id]?.value().trim())))))
+            Boolean(this.answerStates?.[ask.id]?.validating || this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.closed || !writable || (!this.answerStates?.[ask.id]?.unconfirmed && !this.askInputs?.[ask.id]?.value().trim())))))
         .when(!writable, el => el.child(div().text_size(10.5).text_color(t.muted).child('Read-only: owning personal project unavailable. Refresh to check again.')))
         .when(Boolean(this.answerStates?.[ask.id]?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(this.answerStates[ask.id].error)))
         .child(div().text_size(9.5).text_color(t.dim).child(ask.id)));

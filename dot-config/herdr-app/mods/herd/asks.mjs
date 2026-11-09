@@ -40,6 +40,7 @@ export function parseAsks(stdout) {
       blocks: typeof ask.blocks === 'string' ? ask.blocks : null,
       parent: typeof ask.parent === 'string' ? ask.parent : null,
       run: ask.run || null,
+      card: ask.card == null ? null : (JSON.stringify(ask.card).length <= 65536 ? ask.card : {schema:'card-too-large'}),
       owner_project: typeof ask.owner_project === 'string' ? ask.owner_project : null });
   }
   return result.sort((a, b) => a.opened_at.localeCompare(b.opened_at) || a.id.localeCompare(b.id));

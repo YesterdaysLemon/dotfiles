@@ -12,6 +12,7 @@ import * as sentences from './sentences.mjs';
 import * as facts from './facts.mjs';
 import * as grid from './grid.mjs';
 import * as askText from './ask-text.mjs';
+import * as cards from './cards.mjs';
 
 // Exercise the shipped view's real callbacks with a tiny GPUI description recorder.
 // Native layout/paint is checked separately by herdr-app and review screenshots.
@@ -40,6 +41,7 @@ function find(node, id) {
 
 function harness(storage = new Map(), execute = async () => ({ code: 1 }), userHome = 'C:/Users/example', viewProps = {}, appSettings = {}) {
   const calls = [];
+  const files = new Map();
   const sharedState = new Map();
   const native = { panes: [{ pane: 'p1', terminal: 't1', tab: 'tab', zoomed: false }],
     spaces: [{ id: 's1', name: 'First', folder: userHome + '/Project/sample', machine: null, tabs: [{ id: 'tab' }] }],
@@ -48,10 +50,11 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
     'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity', 'questionBlocks',
-    'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi'];
+    'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi',
+    'cardSignature', 'acceptCardImage', 'acceptCardReceipt', 'cardOptions'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
-  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'closeOverlay', 'window', 'settings', 'hc', 'panes', 'spaces', 'focused', ...names, source)(
+  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'closeOverlay', 'window', 'settings', 'writeTextFile', 'hc', 'panes', 'spaces', 'focused', ...names, source)(
     class {}, element, element, element, element, element,
     { new: element }, InputState,
     (...args) => calls.push(args), () => new Proxy({}, { get: (_, key) => String(key) }), key => sharedState.get(key), (key, value) => sharedState.set(key, value), () => userHome,
@@ -59,9 +62,10 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
     () => viewProps, execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]), id => calls.push(['closeOverlay', id]),
     () => ({ platform: 'linux' }),
     () => appSettings,
+    async (file, text, expected) => { assert.equal(expected, null); files.set(file, text); },
     args => execute('hc', args),
     () => native.panes, () => native.spaces, () => native.focus,
-    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid, ...askText })[name]),
+    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid, ...askText, ...cards })[name]),
   );
   const view = new Herd();
   const seat = { address: 't1', pane: 'p1', space: 's1', name: 'Sample', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample', institution: 'sample' };
@@ -71,9 +75,10 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   view.width = 340;
   view.lastCheck = Date.now();
   view.answerStates = {}; view.askInputs = {}; view.evidence = {}; view.scriptStates = {};
+  view.cards = {};
   view.livePanes = native.panes; view.liveSpaces = native.spaces; view.liveFocus = native.focus;
   view.cache = { t1: { checked: Date.now(), cwd: model.pathKey(seat.cwd), prompt: { id: 'claude-trust', title: 'Folder trust', key: 'Enter', quote: 'Do you trust the files in this folder?' } } };
-  return { view, seat, calls, storage, sharedState, native };
+  return { view, seat, calls, storage, sharedState, native, files };
 }
 
 test('quiet seats remain visible, dimmed and clickable; rendering sends no terminal actions', () => {
