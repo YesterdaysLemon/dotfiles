@@ -26,7 +26,8 @@ here, under `dot-config/herdr-app/`: `settings.json`, `keys.json`, the `seats-ma
 place it with:
 
 ```sh
-scripts/herdr-app.sh           # link (macOS) or copy (Windows) the files, then show the seats-main layout
+scripts/herdr-app.sh           # link (macOS) or copy (Windows) the files, then show the seats-main layout;
+                               # herd's files are always copied (the app refuses linked modules), so re-run after pulling
 scripts/herdr-app.sh capture   # Windows only: copy changes made in the app back here
 ```
 
