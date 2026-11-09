@@ -71,6 +71,7 @@ export default class Herd extends View {
     }).find(Boolean);
     if (!project) { this.asksError = true; cx.notify(); return; } // No personal institution: no aggregate reads or endless Loading.
     const readingSpace = this.viewSpace;
+    const readingAt = Date.now();
     this.asksBusy = true;
     this.asksError = false;
     cx.notify();
@@ -81,6 +82,14 @@ export default class Herd extends View {
         const items = parseAsks(result.stdout).filter(ask => !ask.owner_project || personalFolder(ask.owner_project, home()));
         this.snapshot();
         if (!this.personalView || this.viewSpace !== readingSpace) return;
+        const outcomes = shared('herd.askOutcomes') || {}, next = { ...outcomes };
+        for (const ask of items) {
+          // A fresh open ledger entry overrides old receipts. Preserve a send
+          // completed after this read began, so an in-flight snapshot cannot undo it.
+          if (next[ask.id] && !(next[ask.id]?.at > readingAt)) delete next[ask.id];
+          if (this.answerStates[ask.id]?.sent && !(this.answerStates[ask.id].at > readingAt)) delete this.answerStates[ask.id];
+        }
+        if (Object.keys(next).length !== Object.keys(outcomes).length) setShared('herd.askOutcomes', next);
         if (this.askList) { this.askList = items; this.prepareAskInputs(); this.loadEvidence(cx); }
         else this.asks = items;
         this.askSource = project;
@@ -242,9 +251,10 @@ export default class Herd extends View {
   }
 
   answerSent(ask) {
-    this.answerStates[ask.id] = { sent: ask.from };
+    const at = Date.now();
+    this.answerStates[ask.id] = { sent: ask.from, at };
     const outcomes = shared('herd.askOutcomes') || {};
-    setShared('herd.askOutcomes', Object.fromEntries([...Object.entries(outcomes).slice(-99), [ask.id, ask.from]]));
+    setShared('herd.askOutcomes', Object.fromEntries([...Object.entries(outcomes).slice(-99), [ask.id, { from: ask.from, at }]]));
     this.asksChecked = 0;
   }
 

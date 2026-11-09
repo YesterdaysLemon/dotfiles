@@ -302,7 +302,7 @@ test('answers write a scratch ledger with exact text once, then require the matc
   assert.equal(commands[0].options.cwd, owner);
   assert.equal(view.answerStates[ask.id].sent, ask.from);
   assert.equal(view.visibleAsks([ask]).length, 0);
-  assert.equal(sharedState.get('herd.askOutcomes')[ask.id], ask.from);
+  assert.equal(sharedState.get('herd.askOutcomes')[ask.id].from, ask.from);
   assert.deepEqual(calls, [], 'the receipt updates shared visibility without a command that dismisses the dialog');
   view.answerAsk(ask, 'Option A', cx);
   assert.equal(commands.length, 1);
@@ -343,7 +343,7 @@ test('a timeout or error after append confirms the exact answer and shows sent w
     assert.deepEqual(commands[1].request, { ...commands[0].request, mode: 'confirm' });
     assert.equal(commands[1].options.cwd, ask.owner_project);
     assert.equal(view.answerStates[ask.id].sent, ask.from);
-    assert.equal(sharedState.get('herd.askOutcomes')[ask.id], ask.from);
+    assert.equal(sharedState.get('herd.askOutcomes')[ask.id].from, ask.from);
     view.answerAsk(ask, 'A', cx);
     assert.equal(commands.length, 2, 'a confirmed answer cannot be sent twice');
   }
@@ -503,4 +503,20 @@ test('a personal space without a usable institution reports unavailable instead 
   const {view}=harness();view.snapshot=()=>[];view.personalView=true;
   view.refreshAsks({notify(){},spawn(){assert.fail('no guessed owner or reader');}});
   assert.equal(view.asksError,true);
+});
+
+
+test('fresh open ledger entries clear persisted sent receipts instead of silently hiding open asks',async()=>{
+ const ask={id:'sample:reopened',from:'sample/guide',to:'al',state:'open',question:'Fixture?',opened_at:'2026-11-09T06:00:00Z'};
+ const {view,sharedState}=harness(new Map(),async()=>({code:0,stdout:JSON.stringify([ask])}));
+ sharedState.set('herd.askOutcomes',{[ask.id]:'sample/guide'});view.answerStates[ask.id]={sent:ask.from};
+ let task;const cx={notify(){},spawn(body){task=body(cx);}};view.refreshAsks(cx);await task;
+ assert.equal(view.visibleAsks().length,1);assert.equal(sharedState.get('herd.askOutcomes')[ask.id],undefined);assert.equal(view.answerStates[ask.id],undefined);
+});
+
+test('a stale in-flight read cannot resurrect a newly sent answer',async()=>{
+ const ask={id:'sample:race',from:'sample/guide',to:'al',state:'open',question:'Fixture?',opened_at:'2026-11-09T06:00:00Z'};
+ let view;const h=harness(new Map(),async()=>{await new Promise(done=>setTimeout(done,3));view.answerSent(ask);return {code:0,stdout:JSON.stringify([ask])};});view=h.view;
+ let task;const cx={notify(){},spawn(body){task=body(cx);}};view.refreshAsks(cx);await task;
+ assert.equal(view.visibleAsks().length,0);assert.equal(h.sharedState.get('herd.askOutcomes')[ask.id].from,ask.from);
 });
