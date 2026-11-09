@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runAnswer } from './answer-runner.mjs';
+import { runAnswer, confirmAnswer } from './answer-runner.mjs';
 
 test('the real launcher preserves multiline/metacharacter answers through an args array into a stub ledger', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herd-launcher-test-'));
@@ -20,4 +20,27 @@ test('the real launcher preserves multiline/metacharacter answers through an arg
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(project, 'answer.json'), 'utf8')), { id: 'sample:fixture', answer });
   const work = path.join(home, 'Work/sample'); fs.mkdirSync(work, { recursive: true });
   assert.throws(() => runAnswer({ project: work, home, id: 'sample:fixture', answer }, { env }));
+});
+
+test('delivery confirmation reads only the canonical owner and requires Al, ID and exact submitted text', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'herd-confirm-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home'), project = path.join(home, 'Project/sample');
+  fs.mkdirSync(project, { recursive: true });
+  const request = { project, home, id: 'sample:fixture', answer: '  A\n\nExact note  ' };
+  const ask = { id: request.id, to: 'al', state: 'answered', answered_by: 'al', answer: 'A\n\nExact note' };
+  const check = items => confirmAnswer(request, { platform: 'linux', run(command, args, settings) {
+    assert.equal(command, 'seats');
+    assert.deepEqual(args, ['--project', fs.realpathSync(project), 'asks', '--json']);
+    assert.equal(settings.timeout, 90000);
+    return JSON.stringify(items);
+  } });
+  assert.equal(check([ask]), 'sent');
+  assert.equal(check([{ ...ask, state: 'open' }]), 'open');
+  for (const replacement of [{ answer: 'Different' }, { answered_by: 'sample/guide' }, { state: 'withdrawn' }]) {
+    assert.equal(check([{ ...ask, ...replacement }]), 'closed');
+  }
+  for (const items of [[], {}, [ask, ask], [{ ...ask, id: 'other:fixture' }], [{ ...ask, to: 'sample/guide' }], [{ ...ask, state: 'mystery' }]]) {
+    assert.throws(() => check(items));
+  }
 });

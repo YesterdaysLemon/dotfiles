@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAsks, questionExcerpt, answerCommand, acceptedAnswer, askImages, askerProfile } from './asks.mjs';
+import { parseAsks, questionExcerpt, answerCommand, acceptedAnswer, askImages, askerProfile, scriptPath, scriptSpace } from './asks.mjs';
 
 const ask = { id: 'sample:20261108T120000Z-123abc', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose the next build?', opened_at: '2026-11-08T12:00:00Z', options: ['one', 'two'], recommendation: 'one', blocks: 'the next build' };
 test('the asks lane retains only open asks to Al and preserves the brief fields', () => {
@@ -55,4 +55,23 @@ test('asker faces bind one current personal role holder, with no Work, remote or
 test('malformed, duplicate, oversized or unknown-state responses never become an all-clear', () => {
   for (const value of ['not json', '{}', JSON.stringify([ask, ask]), JSON.stringify([{ ...ask, state: 'mystery' }]), JSON.stringify(Array(501).fill(ask))]) assert.throws(() => parseAsks(value));
   assert.equal(questionExcerpt({ question: ' a   longer\nquestion for the next build ' }, 16), 'a longer questi…');
+});
+
+
+test('run is a literal optional path, and its destination prefers the owning personal space and excludes Work', () => {
+  assert.equal(parseAsks(JSON.stringify([{ ...ask, run: 'tools/setup.ps1' }]))[0].run, 'tools/setup.ps1');
+  for (const run of ['../bad.ps1', '/bad.ps1', 'C:/bad.ps1', 'tools\\bad.ps1', 'tools//bad.ps1', '.git/bad.ps1', 'tools/./bad.ps1', 'bad\n.ps1']) {
+    assert.equal(scriptPath(run), false); assert.throws(() => parseAsks(JSON.stringify([{ ...ask, run }])));
+  }
+  const userHome = 'C:/Users/example', owner_project = userHome + '/Project/sample';
+  const question = { ...ask, owner_project };
+  const seat = { space: 'owner', cwd: owner_project };
+  const groups = [{ key: 'sample', workspace: 'sample', seats: [seat] }];
+  const all = [{ id: 'owner', folder: owner_project }, { id: 'current', folder: userHome + '/Project/other' }, { id: 'work', folder: userHome + '/Work/other' }, { id: 'remote', machine: 'remote', folder: owner_project }];
+  assert.equal(scriptSpace(question, groups, all, 'current', userHome), 'owner');
+  assert.equal(scriptSpace(question, [], all, 'current', userHome), 'current');
+  assert.equal(scriptSpace(question, [], all, 'work', userHome), null);
+  assert.equal(scriptSpace(question, [], all, 'remote', userHome), null);
+  groups[0].seats.push({ space: 'owner', cwd: userHome + '/Work/other' });
+  assert.equal(scriptSpace(question, groups, all, 'current', userHome), 'current', 'a mixed Work space cannot own the run tab');
 });

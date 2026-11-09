@@ -45,7 +45,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
     focus: { space: 's1', tab: 'tab', pane: 'p1' } };
   const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {} }) };
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
-    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages',
+    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity',
     'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
@@ -68,7 +68,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   view.personalView = true;
   view.width = 340;
   view.lastCheck = Date.now();
-  view.answerStates = {}; view.askInputs = {}; view.evidence = {};
+  view.answerStates = {}; view.askInputs = {}; view.evidence = {}; view.scriptStates = {};
   view.livePanes = native.panes; view.liveSpaces = native.spaces; view.liveFocus = native.focus;
   view.cache = { t1: { checked: Date.now(), cwd: model.pathKey(seat.cwd), prompt: { id: 'claude-trust', title: 'Folder trust', key: 'Enter', quote: 'Do you trust the files in this folder?' } } };
   return { view, seat, calls, storage, sharedState, native };
@@ -111,7 +111,7 @@ test('observed history persists outside render and survives a fresh view reload'
   assert.ok(first.storage.has('herd.states'));
   const reloaded = harness(first.storage).view;
   reloaded.scan = () => {};
-  reloaded.init({}, { spawn() {}, timer: { every() {} } });
+  reloaded.init({}, { notify() {}, spawn() {}, timer: { every() {} } });
   reloaded.render();
   assert.equal(reloaded.history.t1.at, observedAt);
 });
@@ -150,7 +150,7 @@ test('asks refresh invokes only the aggregate reader, and ask clicks open detail
   const { view, seat, calls } = harness(new Map(), async (...args) => { commands.push(args); return { code: 0, stdout: JSON.stringify([ask]) }; });
   view.snapshot = () => [{ key: 'sample', workspace: 'sample', seats: [seat] }];
   let task;
-  view.refreshAsks({ spawn: body => { task = body({ notify() {} }); } });
+  view.refreshAsks({ notify() {}, spawn: body => { task = body({ notify() {} }); } });
   await task;
   assert.deepEqual(commands[0].slice(0, 2), ['seats', ['--project', seat.cwd, 'asks', '--to', 'al', '--all', '--open', '--json']]);
   assert.equal(view.asks.length, 1);
@@ -166,7 +166,7 @@ test('a failed asks refresh retains the last list and marks it stale', async () 
   view.snapshot = () => [{ key: 'sample', workspace: 'sample', seats: [seat] }];
   view.asks = [{ id: 'sample:old', question: 'Known open ask' }];
   let task;
-  view.refreshAsks({ spawn: body => { task = body({ notify() {} }); } });
+  view.refreshAsks({ notify() {}, spawn: body => { task = body({ notify() {} }); } });
   await task;
   assert.equal(view.asks[0].id, 'sample:old');
   assert.equal(view.asksError, true);
@@ -333,6 +333,71 @@ test('failed, timed-out and mismatched answer receipts stay visible; Work makes 
   }
 });
 
+test('a timeout or error after append confirms the exact answer and shows sent without another write', async () => {
+  for (const failure of [new Error('Timed out'), { code: 1, stderr: 'Notification failed' }, { code: 0, stdout: '' }]) {
+    const commands = [];
+    const { view, sharedState } = harness(new Map(), async (command, args, options) => {
+      const request = JSON.parse(args[1]); commands.push({ request, options });
+      if (request.mode === 'confirm') return { code: 0, stdout: '{"state":"sent"}' };
+      if (failure instanceof Error) throw failure;
+      return failure;
+    });
+    const ask = { id: 'sample:fixture', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', owner_project: 'C:/Users/example/Project/sample' };
+    view.askList = [ask]; view.prepareAskInputs(); view.askInputs[ask.id].set_value('Exact note');
+    let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+    view.answerAsk(ask, 'A', cx); await task;
+    assert.equal(commands.length, 2);
+    assert.equal(commands[0].request.answer, 'A\n\nExact note');
+    assert.deepEqual(commands[1].request, { ...commands[0].request, mode: 'confirm' });
+    assert.equal(commands[1].options.cwd, ask.owner_project);
+    assert.equal(view.answerStates[ask.id].sent, ask.from);
+    assert.equal(sharedState.get('herd.askOutcomes')[ask.id], ask.from);
+    view.answerAsk(ask, 'A', cx);
+    assert.equal(commands.length, 2, 'a confirmed answer cannot be sent twice');
+  }
+});
+
+test('unavailable delivery checks retain submitted text; Check delivery only reads, and open/closed outcomes stay distinct', async () => {
+  const commands = []; let state = null;
+  const { view } = harness(new Map(), async (_command, args) => {
+    const request = JSON.parse(args[1]); commands.push(request);
+    return request.mode === 'confirm' && state ? { code: 0, stdout: JSON.stringify({ state }) } : { code: 1 };
+  });
+  const ask = { id: 'sample:fixture', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', owner_project: 'C:/Users/example/Project/sample' };
+  view.askList = [ask]; view.prepareAskInputs(); view.askInputs[ask.id].set_value('Original answer');
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.answerAsk(ask, null, cx); await task;
+  assert.equal(view.answerStates[ask.id].unconfirmed, 'Original answer');
+  assert.equal(find(view.render(), 'herd-answer-send-' + ask.id).childNodes[0], 'Check delivery');
+  assert.equal(find(view.render(), 'herd-answer-input-' + ask.id).values.disabled, true);
+  view.askInputs[ask.id].set_value('Changed draft');
+  state = 'closed'; view.answerAsk(ask, null, cx); await task;
+  assert.equal(commands.length, 3); assert.equal(commands[2].mode, 'confirm');
+  assert.equal(commands[2].answer, 'Original answer');
+  assert.equal(view.answerStates[ask.id].closed, true);
+  view.answerStates[ask.id] = { unconfirmed: 'Original answer' };
+  state = 'open'; view.answerAsk(ask, null, cx); await task;
+  assert.equal(view.answerStates[ask.id].unconfirmed, undefined);
+  assert.match(view.answerStates[ask.id].error, /still shows this ask open/);
+});
+
+test('a slow inbox refresh shows checking with a generous timeout and keeps the last list until completion', async () => {
+  let resolve; const pending = new Promise(done => { resolve = done; });
+  const commands = [];
+  const { view } = harness(new Map(), async (...args) => { commands.push(args); return pending; });
+  const ask = { id: 'sample:old', from: 'sample/guide', to: 'al', state: 'open', question: 'Known open ask', opened_at: '2026-11-08T12:00:00Z' };
+  view.askList = [ask]; view.askSource = 'C:/Users/example/Project/sample'; view.asksError = true;
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.refreshAsks(cx);
+  assert.equal(view.asksBusy, true); assert.equal(view.asksError, false);
+  assert.equal(commands[0][2].timeout, 120000);
+  assert.equal(view.askList[0].id, ask.id);
+  assert.equal(find(view.render(), 'herd-refresh-asks').childNodes[0], 'Checking…');
+  resolve({ code: 0, stdout: '[]' }); await task;
+  assert.equal(view.asksBusy, false); assert.equal(view.asksError, false);
+  assert.deepEqual(view.askList, []);
+});
+
 test('a missing owner disables answers, and Work starts no evidence reads', async () => {
   const { view, calls } = harness(new Map(), async () => assert.fail('no reader should run'));
   const ask = { id: 'sample:fixture', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose docs/sheet.png?', options: ['A'] };
@@ -420,6 +485,20 @@ test('return awaits zoom and focus, then closes only the grid as its last host a
   assert.deepEqual(calls, [['pane.close', { pane: 'pg' }]]);
 });
 
+test('a tile defaults to focus in the preserved terminal split and closes only its grid', async () => {
+  const record = { institution: 'sample', space: 's1', tab: 'tab', pane: 'pg', focusPane: 'p1', zoomPane: null, token: 'fixture' };
+  const commands = [];
+  const { view, seat, native, sharedState, calls } = harness(new Map(), async (...args) => {
+    commands.push(args); return { code: 0, stdout: '{"ok":true}' };
+  }, 'C:/Users/example', { grid: record });
+  native.panes.push({ pane: 'pg', mod: 'herd', tab: 'tab', zoomed: true });
+  sharedState.set('herd.gridPanes', { tab: record });
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.openGridSeat(seat, cx); await task;
+  assert.deepEqual(commands.map(call => [call[1][1], JSON.parse(call[1][2])]), [['pane.zoom', { pane: 'pg' }], ['pane.focus', { pane: 'p1' }]]);
+  assert.deepEqual(calls, [['pane.close', { pane: 'pg' }]]);
+});
+
 test('the fallback handoff receives only validated owned grids and preserves current terminal focus', async () => {
   const commands = [];
   const { view, native, sharedState, calls } = harness(new Map(), async (...args) => { commands.push(args); return { code: 0 }; });
@@ -448,4 +527,53 @@ test('a screen moved to Work while its read was in flight never becomes a quote'
   view.scan(cx); await task;
   assert.deepEqual(view.cache, {});
   assert.equal(find(view.render(), 'herd-quote-t1'), null);
+});
+
+
+test('Open terminal checks the script before launching one ID-labelled tab in a personal space', async () => {
+  const commands = [], owner = 'C:/Users/example/Project/sample';
+  const { view, seat } = harness(new Map(), async (command, args) => {
+    commands.push({ command, args });
+    if (command === 'node') return { code: 0, stdout: JSON.stringify({ project: owner, commit: 'a'.repeat(40), digest: 'b'.repeat(64), token: 'fixture_encoded_request' }) };
+    return { code: 0, stdout: '{"tab":"new-tab","terminal":"fixture"}' };
+  });
+  seat.space = 'personal'; view.viewSpace = 'personal';
+  view.askerGroups = [{ key: 'sample', workspace: 'sample', seats: [seat] }];
+  view.allSpaces = [{ id: 'personal', folder: owner }, { id: 'work', folder: 'C:/Users/example/Work/example' }];
+  const ask = { id: 'sample:run', from: 'sample/guide', to: 'al', state: 'open', question: 'Run this?', owner_project: owner, run: 'tools/setup.ps1' };
+  view.askList = [ask];
+  let task, cooldown; const cx = { notify() {}, spawn(body) { task = body(cx); }, timer: { after(ms, body) { assert.equal(ms, 1500); cooldown = body; } } };
+  const button = find(view.render(), 'herd-run-' + ask.id);
+  button.click({}, cx); button.click({}, cx);
+  assert.equal(commands.length, 1, 'rapid clicks cannot start another validation or tab');
+  await task;
+  assert.equal(commands.length, 2);
+  assert.equal(commands[0].args[1], 'check');
+  const tab = JSON.parse(commands[1].args[2]);
+  assert.deepEqual([commands[1].command, ...commands[1].args.slice(0, 2)], ['herdr-app', 'do', 'tab.new']);
+  assert.equal(tab.space, 'personal'); assert.equal(tab.name, ask.id); assert.equal(tab.folder, owner);
+  assert.equal(tab.argv[0], 'node'); assert.equal(tab.argv[2], 'launch');
+  assert.equal(tab.argv[3], 'fixture_encoded_request');
+  assert.equal(view.scriptStates[ask.id].opened, true);
+  view.openAskTerminal(ask, cx);
+  assert.equal(commands.length, 2, 'the short cooldown still refuses a duplicate');
+  cooldown(cx);
+  assert.equal(find(view.render(), 'herd-run-' + ask.id).childNodes[0], 'Reopen terminal');
+  view.openAskTerminal(ask, cx); await task;
+  assert.equal(commands.length, 4, 'an intentional reopen validates again and opens another tab');
+});
+
+test('a changed script or a space that becomes Work cannot open a terminal', async () => {
+  for (const changed of [true, false]) {
+    const commands = [];
+    const { view } = harness(new Map(), async (...args) => {
+      commands.push(args);
+      if (!changed) view.personalView = false;
+      return changed ? { code: 1, stderr: 'The script differs from HEAD.' } : { code: 0, stdout: JSON.stringify({ project: 'C:/Users/example/Project/sample', commit: 'a'.repeat(40), digest: 'b'.repeat(64), token: 'fixture_encoded_request' }) };
+    });
+    const ask = { id: 'sample:run', owner_project: 'C:/Users/example/Project/sample', run: 'tools/setup.ps1' };
+    let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+    view.openAskTerminal(ask, cx); await task;
+    assert.equal(commands.length, 1); assert.ok(view.scriptStates[ask.id].error);
+  }
 });

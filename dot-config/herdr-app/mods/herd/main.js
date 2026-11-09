@@ -4,7 +4,7 @@ import { v_flex, h_flex, InputState, Input } from 'gpui-base';
 import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
-import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages } from './asks.mjs';
+import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages, scriptSpace } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
 import { publishFacts, consumeFacts, forgetFacts } from './facts.mjs';
@@ -36,6 +36,7 @@ export default class Herd extends View {
     this.asksBusy = false;
     this.askSource = props()?.askSource || null;
     this.answerStates = {};
+    this.scriptStates = {};
     this.askInputs = {};
     this.evidence = {};
     this.evidenceBusy = false;
@@ -81,9 +82,11 @@ export default class Herd extends View {
     }).find(Boolean);
     if (!project) { this.asksError = Boolean(this.asks?.length || this.asksChecked); return; } // No personal institution: no aggregate reads.
     this.asksBusy = true;
+    this.asksError = false;
+    cx.notify();
     cx.spawn(async cx => {
       try {
-        const result = await exec(seatsExecutable(window()?.platform), ['--project', project, 'asks', '--to', 'al', '--all', '--open', '--json'], { timeout: 30000 });
+        const result = await exec(seatsExecutable(window()?.platform), ['--project', project, 'asks', '--to', 'al', '--all', '--open', '--json'], { timeout: 120000 });
         if (result.code !== 0) throw new Error('asks unavailable');
         const items = parseAsks(result.stdout).filter(ask => !ask.owner_project || personalFolder(ask.owner_project, home()));
         if (this.askList) { this.askList = items; this.prepareAskInputs(); this.loadEvidence(cx); }
@@ -180,25 +183,77 @@ export default class Herd extends View {
   }
 
   answerAsk(ask, option, cx) {
-    if (this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.sent || !this.visibleAsks([ask]).length) return;
+    if (this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.sent || this.answerStates?.[ask.id]?.closed || !this.visibleAsks([ask]).length) return;
     this.snapshot();
     if (!this.personalView) return;
     const note = this.askInputs?.[ask.id]?.value().trim() || '';
     let command;
-    try { command = answerCommand(ask, option ? option + (note ? '\n\n' + note : '') : note, home()); }
+    const pending = this.answerStates?.[ask.id]?.unconfirmed;
+    try { command = answerCommand(ask, pending || (option ? option + (note ? '\n\n' + note : '') : note), home()); }
     catch (error) { this.answerStates[ask.id] = { error: error.message }; cx.notify(); return; }
     this.answerStates[ask.id] = { sending: true }; // Synchronous guard before spawning: rapid clicks cannot duplicate a write.
     cx.notify();
     cx.spawn(async cx => {
       try {
+        if (pending) throw new Error('Check the previous delivery without sending again.');
         const result = await exec('node', [appHome() + '/mods/herd/answer-runner.mjs', JSON.stringify({ project: command.cwd, id: ask.id,
-          answer: command.args.at(-1), home: home() })], { cwd: command.cwd, timeout: 30000 });
+          answer: command.args.at(-1), home: home() })], { cwd: command.cwd, timeout: 100000 });
         if (!acceptedAnswer(result, ask.id)) throw new Error(result.stderr?.trim().slice(0, 400) || 'No matching answer receipt. Refresh before trying again.');
-        this.answerStates[ask.id] = { sent: ask.from };
-        const outcomes = shared('herd.askOutcomes') || {};
-        setShared('herd.askOutcomes', Object.fromEntries([...Object.entries(outcomes).slice(-99), [ask.id, ask.from]]));
-        this.asksChecked = 0;
-      } catch (error) { this.answerStates[ask.id] = { error: String(error.message || 'No answer receipt; refresh before trying again.').slice(0, 400) }; }
+        this.answerSent(ask);
+      } catch {
+        this.answerStates[ask.id] = { sending: true, checking: true };
+        cx.notify();
+        try {
+          const result = await exec('node', [appHome() + '/mods/herd/answer-runner.mjs', JSON.stringify({ mode: 'confirm', project: command.cwd,
+            id: ask.id, answer: command.args.at(-1), home: home() })], { cwd: command.cwd, timeout: 100000 });
+          if (result.code !== 0) throw new Error('Delivery check unavailable.');
+          const state = JSON.parse(result.stdout).state;
+          if (state === 'sent') this.answerSent(ask);
+          else if (state === 'open') this.answerStates[ask.id] = { error: 'The owning ledger still shows this ask open. Your answer was not recorded.' };
+          else if (state === 'closed') this.answerStates[ask.id] = { closed: true, error: 'This ask is already closed with a different outcome. Refresh the inbox.' };
+          else throw new Error('Invalid delivery check.');
+        } catch {
+          this.answerStates[ask.id] = { unconfirmed: command.args.at(-1), error: 'Delivery is unconfirmed. Check delivery before sending again.' };
+        }
+      }
+      finally { cx.notify(); }
+    });
+  }
+
+  answerSent(ask) {
+    this.answerStates[ask.id] = { sent: ask.from };
+    const outcomes = shared('herd.askOutcomes') || {};
+    setShared('herd.askOutcomes', Object.fromEntries([...Object.entries(outcomes).slice(-99), [ask.id, ask.from]]));
+    this.asksChecked = 0;
+  }
+
+  openAskTerminal(ask, cx) {
+    if (this.scriptStates?.[ask.id]?.busy || this.scriptStates?.[ask.id]?.cooldown) return;
+    this.snapshot();
+    if (!this.personalView || !ask.run || !personalFolder(ask.owner_project, home())) return;
+    this.scriptStates[ask.id] = { busy: true };
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const helper = appHome() + '/mods/herd/script-runner.mjs';
+        const request = { id: ask.id, run: ask.run, project: ask.owner_project, home: home() };
+        const result = await exec('node', [helper, 'check', JSON.stringify(request)], { timeout: 120000 });
+        if (result.code !== 0) throw new Error(result.stderr?.trim().slice(0, 250) || 'The committed script is unavailable.');
+        const script = JSON.parse(result.stdout);
+        if (!personalFolder(script.project, home()) || !/^[0-9a-f]{40,64}$/.test(script.commit) || !/^[0-9a-f]{64}$/.test(script.digest) ||
+            typeof script.token !== 'string' || !/^[A-Za-z0-9_-]{1,16000}$/.test(script.token)) throw new Error('Invalid script check.');
+        this.snapshot();
+        const target = this.personalView && scriptSpace(ask, this.askerGroups || [], this.allSpaces || [], this.viewSpace, home(), this.infos);
+        if (!target) throw new Error('Open this ask in a personal space to run its script.');
+        const reply = await exec('herdr-app', ['do', 'tab.new', JSON.stringify({ space: target, folder: script.project, name: ask.id,
+          argv: ['node', helper, 'launch', script.token] })], { timeout: 10000 });
+        const created = reply.code === 0 && JSON.parse(reply.stdout);
+        if (!created?.tab || !created?.terminal || created.error) throw new Error('The terminal did not open.');
+        const state = { opened: true, cooldown: true };
+        this.scriptStates[ask.id] = state;
+        cx.timer.after(1500, cx => { if (this.scriptStates[ask.id] === state) { state.cooldown = false; cx.notify(); } });
+        if (props()?.overlay) closeOverlay(props().overlay);
+      } catch (error) { this.scriptStates[ask.id] = { error: String(error.message || 'The terminal did not open.').slice(0, 250) }; }
       finally { cx.notify(); }
     });
   }
@@ -257,14 +312,19 @@ export default class Herd extends View {
             .when(evidence?.status !== 'ready', el => el.child(div().text_size(10).text_color(t.dim).child(`${path} · ${evidence ? 'preview unavailable' : 'loading preview…'}`)));
         }))
         .when(Boolean(ask.blocks), el => el.child(div().text_size(11).text_color(t.muted).child(`Waiting: ${ask.blocks}`)))
+        .when(Boolean(ask.run), el => el.child(h_flex().gap(8).items_center()
+          .child(this.askButton(`herd-run-${ask.id}`, this.scriptStates?.[ask.id]?.busy ? 'Checking script…' : this.scriptStates?.[ask.id]?.cooldown ? 'Opened terminal' : this.scriptStates?.[ask.id]?.opened ? 'Reopen terminal' : 'Open terminal', cx => this.openAskTerminal(ask, cx), t,
+            Boolean(!writable || this.scriptStates?.[ask.id]?.busy || this.scriptStates?.[ask.id]?.cooldown)))
+          .child(div().text_size(10).text_color(t.dim).child(ask.run))))
+        .when(Boolean(this.scriptStates?.[ask.id]?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(this.scriptStates[ask.id].error)))
         .when(Boolean(ask.recommendation && !ask.options?.length), el => el.child(div().text_size(11).text_color(t.muted).child(`Recommended: ${ask.recommendation}`)))
         .when(Boolean(this.askInputs?.[ask.id]), el => el.child(Input.new(this.askInputs[ask.id]).id(`herd-answer-input-${ask.id}`).h(36).px(9).rounded(6).border(1).border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)
-          .disabled(Boolean(this.answerStates?.[ask.id]?.sending || !writable))))
+          .disabled(Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable))))
         .child(h_flex().gap(6).flex_wrap().children((ask.options || []).map((option, index) => this.askButton(`herd-answer-option-${ask.id}-${index}`,
           option + (option === ask.recommendation ? ' · recommended' : ''), cx => this.answerAsk(ask, option, cx), t,
-          Boolean(this.answerStates?.[ask.id]?.sending || !writable), option === ask.recommendation)))
-          .child(this.askButton(`herd-answer-send-${ask.id}`, this.answerStates?.[ask.id]?.sending ? 'Sending…' : 'Send answer', cx => this.answerAsk(ask, null, cx), t,
-            Boolean(this.answerStates?.[ask.id]?.sending || !writable || !this.askInputs?.[ask.id]?.value().trim()))))
+          Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable), option === ask.recommendation)))
+          .child(this.askButton(`herd-answer-send-${ask.id}`, this.answerStates?.[ask.id]?.checking ? 'Checking delivery…' : this.answerStates?.[ask.id]?.sending ? 'Sending…' : this.answerStates?.[ask.id]?.unconfirmed ? 'Check delivery' : 'Send answer', cx => this.answerAsk(ask, null, cx), t,
+            Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.closed || !writable || (!this.answerStates?.[ask.id]?.unconfirmed && !this.askInputs?.[ask.id]?.value().trim())))))
         .when(!writable, el => el.child(div().text_size(10.5).text_color(t.muted).child('Read-only: owning personal project unavailable. Refresh to check again.')))
         .when(Boolean(this.answerStates?.[ask.id]?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(this.answerStates[ask.id].error)))
         .child(div().text_size(9.5).text_color(t.dim).child(ask.id)));
@@ -279,8 +339,8 @@ export default class Herd extends View {
         .child(div().text_size(14).font_semibold().text_color(t.foreground).child(`Asks to you · ${items.length}`))
         .child(div().id('herd-close-asks').p(6).text_color(t.muted).cursor_pointer().on_click(() => closeOverlay(props().overlay)).child('Close')))
       .child(h_flex().gap(8).items_center()
-        .child(this.askButton('herd-refresh-asks', this.asksBusy ? 'Refreshing…' : 'Refresh', cx => { this.asksChecked = 0; this.refreshAsks(cx); }, t, this.asksBusy))
-        .when(this.asksError, el => el.child(div().text_size(11).text_color(t.blocked).child('Could not refresh · showing last known asks'))))
+        .child(this.askButton('herd-refresh-asks', this.asksBusy ? 'Checking…' : 'Refresh', cx => { this.asksChecked = 0; this.refreshAsks(cx); }, t, this.asksBusy))
+        .when(this.asksError && !this.asksBusy, el => el.child(div().text_size(11).text_color(t.blocked).child('Could not refresh · showing last known asks'))))
       .children(Object.values(this.answerStates || {}).filter(state => state.sent).slice(-3).map(state => div().text_size(11).text_color(t.done).child(`Sent to ${state.sent}`)))
       .child(v_flex().id('herd-ask-details').flex_1().min_h(0).gap(12).overflow_y_scrollbar()
         .when(!this.personalView, el => el.child(div().text_size(12).text_color(t.muted).child('Personal asks are available in Project.')))
@@ -310,6 +370,7 @@ export default class Herd extends View {
 
   snapshot() {
     const allSpaces = spaces();
+    this.allSpaces = allSpaces;
     this.livePanes = panes();
     this.liveSpaces = allSpaces;
     this.liveFocus = focused();
@@ -410,12 +471,10 @@ export default class Herd extends View {
   openGridSeat(seat, cx) {
     const pane = panes().find(p => p.pane === seat.pane && p.terminal === seat.address);
     if (!pane) { this.jump(seat); return; }
-    cx.spawn(async cx => {
-      try {
-        if (!pane.zoomed) await gridApi(exec, 'pane.zoom', { pane: pane.pane });
-        run('pane.focus', { pane: pane.pane });
-      } catch (error) { this.gridError = String(error.message || 'Could not open the seat.').slice(0, 300); cx.notify(); }
-    });
+    const record = boundGrid(props()?.grid, shared('herd.gridPanes'), panes(), spaces());
+    if (record && pane.tab === record.tab) {
+      this.returnGrid({ ...record, focusPane: pane.pane, zoomPane: record.zoomPane === pane.pane ? pane.pane : null }, cx);
+    } else this.jump(seat);
   }
 
   gridView(t) {
@@ -665,7 +724,8 @@ export default class Herd extends View {
             .child(h_flex().justify_between()
               .child(div().text_size(10.5).text_color(t.muted).child('Asks to you'))
               .child(div().text_size(10).text_color(t.dim).child(String(inbox.length))))
-            .when(this.asksError, el => el.child(div().text_size(10).text_color(t.muted).child('Could not refresh · showing last known asks')))
+            .when(this.asksBusy, el => el.child(div().text_size(10).text_color(t.muted).child('Checking… · showing last known asks')))
+            .when(this.asksError && !this.asksBusy, el => el.child(div().text_size(10).text_color(t.muted).child('Could not refresh · showing last known asks')))
             .when(!this.asks?.length && !this.asksError, el => el.child(div().text_size(10.5).text_color(t.dim).child(this.asksChecked ? 'No open asks in the configured institutions.' : 'Loading personal asks…')))
             .children(inbox.slice(0, 2).map(ask => this.askRow(ask, t)))
             .when(Boolean(inbox.length), el => el.child(div().id('herd-all-asks').py(5).text_size(10.5).text_color(t.muted).cursor_pointer()

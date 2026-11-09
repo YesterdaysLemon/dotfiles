@@ -39,12 +39,22 @@ uncommitted-image fallback, Work/remote reads or default layout activation. Run 
 
 `asks.mjs` validates `seats asks --to al --all --open --json`. Clicking any teaser opens the full inbox, grouped by
 institution. Explicit operator clicks can answer through an args array, with the owning personal project and
-`--from al`. Disable the card while sending; only exit 0 plus the exact stdout ID confirms sent. Never treat a
-timeout as success. Test writes only against scratch fixture ledgers, never real asks. The kit routes notifications.
+`--from al`. Disable the card while sending. Exit 0 plus the exact stdout ID confirms sent; after any send failure,
+read only the owning ledger and require the same ID, Al as answerer and the exact submitted text before showing sent.
+An unavailable check keeps a Check delivery action that reads without resending. Test writes only against scratch
+fixture ledgers, never real asks. The kit routes notifications.
 `answer-runner.mjs` uses Node to preserve arbitrary text; Windows invokes the installed Bash seats script through
 Git Bash with an args array, bypassing cmd.exe's multiline restriction. Never interpolate answers into shell code.
-Preserve the last list with a stale indicator on refresh failure. Ask evidence uses only explicitly named committed
+Inbox reads allow 120 seconds and show Checking while retaining the last list; send/confirmation helpers allow 90
+seconds inside a 100-second exec. Preserve the last list with a stale indicator on refresh failure. Ask evidence uses only explicitly named committed
 PNG paths within the owning project, through the existing bounded reader and app-home cache; no writes under mods/.
+
+The rough ask terminal card preserves the optional kit `run` path. An explicit Open terminal click validates the
+owning personal repository through the kit's read-only `_asks-run-check` gate, HEAD regular-file mode and unchanged working bytes, then opens an ask-ID-labelled tab
+in the owning institution's personal space or the current personal space. Never Work or remote. The initial card
+supports `.ps1` scripts only: Windows PowerShell on Windows, `pwsh` elsewhere. `script-runner.mjs` rechecks HEAD and
+the file digest inside the terminal before launching with inherited stdio and argv, never a shell command string.
+No live renewal or real-ask execution in tests; use a harmless committed scratch script. Include the helper in install.
 
 `sentences.mjs` recognizes bounded literal Codex assistant prose. It skips queued input, menus, tool bodies,
 credential-like assignments and ambiguous frames. A missing/expired quote stays unavailable on hover only; never invent

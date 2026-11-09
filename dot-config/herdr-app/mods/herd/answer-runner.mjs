@@ -18,23 +18,45 @@ export function seatsInvocation(platform = process.platform, env = process.env, 
   throw new Error('Git Bash is unavailable.');
 }
 
-export function runAnswer(request, options = {}) {
+function answerContext(request, options) {
   const run = options.run || execFileSync;
   const project = fs.realpathSync(request?.project || '');
   const userHome = fs.realpathSync(request?.home || '');
   const command = answerCommand({ id: request.id, to: 'al', state: 'open', owner_project: project }, request.answer, userHome);
   const invocation = seatsInvocation(options.platform, options.env, run);
-  return run(invocation.command, [...invocation.prefix, ...command.args], { cwd: command.cwd, encoding: 'utf8', windowsHide: true,
-    timeout: 25000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], env: options.env || process.env });
+  return { run, command, invocation, settings: { cwd: command.cwd, encoding: 'utf8', windowsHide: true,
+    timeout: 90000, maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], env: options.env || process.env } };
+}
+
+export function runAnswer(request, options = {}) {
+  const { run, command, invocation, settings } = answerContext(request, options);
+  return run(invocation.command, [...invocation.prefix, ...command.args], settings);
+}
+
+export function confirmAnswer(request, options = {}) {
+  const { run, command, invocation, settings } = answerContext(request, options);
+  // Read only the explicit owning ledger, including closed asks. Never send again here.
+  const items = JSON.parse(run(invocation.command, [...invocation.prefix, '--project', command.cwd, 'asks', '--json'], settings));
+  if (!Array.isArray(items) || items.length > 10000) throw new Error('Invalid owning ledger response.');
+  const matches = items.filter(ask => ask?.id === request.id);
+  if (matches.length !== 1 || matches[0].to !== 'al') throw new Error('The owning ask is unavailable.');
+  const ask = matches[0];
+  if (ask.state === 'answered' && ask.answered_by === 'al' && ask.answer === command.args.at(-1)) return 'sent';
+  if (ask.state === 'open') return 'open';
+  if (ask.state === 'answered' || ask.state === 'withdrawn') return 'closed';
+  throw new Error('Invalid owning ask state.');
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     if (process.argv.length !== 3 || process.argv[2].length > 100000) throw new Error('Invalid answer request.');
-    process.stdout.write(runAnswer(JSON.parse(process.argv[2])));
+    const request = JSON.parse(process.argv[2]);
+    if (request.mode === 'confirm') process.stdout.write(JSON.stringify({ state: confirmAnswer(request) }));
+    else if (request.mode == null) process.stdout.write(runAnswer(request));
+    else throw new Error('Invalid answer mode.');
   } catch (error) {
     const detail = error.stderr?.toString('utf8').trim();
-    console.error(detail?.slice(0, 400) || (error.code === 'ETIMEDOUT' ? 'Answer timed out; refresh before trying again.' : error.message));
+    console.error(detail?.slice(0, 400) || (error.code === 'ETIMEDOUT' ? 'The command timed out; delivery needs checking.' : error.message));
     process.exitCode = 1;
   }
 }
