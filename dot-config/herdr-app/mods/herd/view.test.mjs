@@ -472,3 +472,35 @@ test('a changed script or a space that becomes Work cannot open a terminal', asy
     assert.equal(commands.length, 1); assert.ok(view.scriptStates[ask.id].error);
   }
 });
+
+
+test('Work-to-Project scope change starts the full inbox immediately, without a render-side task or minute wait', async () => {
+  const commands = [];
+  const asks = Array.from({ length: 9 }, (_, i) => ({ id:'sample:scope'+i, from:'sample/guide', to:'al', state:'open', question:'Fixture question?', opened_at:'2026-11-09T06:00:00Z', owner_project:'C:/Users/example/Project/sample' }));
+  const {view,seat}=harness(new Map(),async(...args)=>{commands.push(args);return {code:0,stdout:JSON.stringify(asks)};});
+  let scope='work';
+  view.snapshot=()=>{view.viewSpace=scope;view.personalView=scope!=='work';return [{key:'sample',workspace:'sample',seats:[seat]}];};
+  view.scan=()=>{};view.refreshMetadata=()=>{};
+  const tasks=[];const cx={notify(){},spawn(body){tasks.push(body(cx));}};
+  view.refreshAsks(cx);view.readerSpace='work';assert.equal(commands.length,0);
+  scope='project';view.refreshScope(cx);await Promise.all(tasks);
+  assert.equal(commands.length,1);assert.equal(view.asks.length,9);assert.equal(view.asksBusy,false);
+  view.refreshScope(cx);assert.equal(commands.length,1,'same-space file events do not bypass cache');
+  scope='work';view.refreshScope(cx);assert.equal(commands.length,1,'Work transition makes no reader calls');
+});
+
+test('a changed personal scope during an inbox read discards that result and immediately serves the new scope', async () => {
+  let scope='first',finish;const commands=[];
+  const {view,seat}=harness(new Map(),async(...args)=>{commands.push(args);if(commands.length===1)return new Promise(done=>{finish=done;});return {code:0,stdout:'[]'};});
+  view.snapshot=()=>{view.viewSpace=scope;view.personalView=true;return [{key:'sample',workspace:'sample',seats:[seat]}];};
+  const tasks=[];const cx={notify(){},spawn(body){tasks.push(body(cx));}};
+  view.refreshAsks(cx);scope='second';view.snapshot();view.asksChecked=0;
+  finish({code:0,stdout:'[]'});await tasks[0];await Promise.all(tasks);
+  assert.equal(commands.length,2);assert.equal(view.asksBusy,false);assert.ok(view.asksChecked);
+});
+
+test('a personal space without a usable institution reports unavailable instead of endless initial Loading',()=>{
+  const {view}=harness();view.snapshot=()=>[];view.personalView=true;
+  view.refreshAsks({notify(){},spawn(){assert.fail('no guessed owner or reader');}});
+  assert.equal(view.asksError,true);
+});

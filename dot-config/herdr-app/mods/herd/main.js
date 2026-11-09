@@ -46,6 +46,7 @@ export default class Herd extends View {
     this.scan(cx);
     this.refreshMetadata(cx);
     this.refreshAsks(cx);
+    this.watchScope(cx);
     cx.spawn(async cx => {
       for (;;) {
         const command = await nextCommand();
@@ -68,7 +69,8 @@ export default class Herd extends View {
       const source = artifactSource(group, home());
       return source ? this.infos?.[group.key]?.info?.project || source : null;
     }).find(Boolean);
-    if (!project) { this.asksError = Boolean(this.asks?.length || this.asksChecked); return; } // No personal institution: no aggregate reads.
+    if (!project) { this.asksError = true; cx.notify(); return; } // No personal institution: no aggregate reads or endless Loading.
+    const readingSpace = this.viewSpace;
     this.asksBusy = true;
     this.asksError = false;
     cx.notify();
@@ -77,13 +79,44 @@ export default class Herd extends View {
         const result = await exec(seatsExecutable(window()?.platform), ['--project', project, 'asks', '--to', 'al', '--all', '--open', '--json'], { timeout: 120000 });
         if (result.code !== 0) throw new Error('asks unavailable');
         const items = parseAsks(result.stdout).filter(ask => !ask.owner_project || personalFolder(ask.owner_project, home()));
+        this.snapshot();
+        if (!this.personalView || this.viewSpace !== readingSpace) return;
         if (this.askList) { this.askList = items; this.prepareAskInputs(); this.loadEvidence(cx); }
         else this.asks = items;
         this.askSource = project;
         this.asksChecked = Date.now();
         this.asksError = false;
       } catch { this.asksError = true; } // Retain the last successful list, visibly marked stale.
-      finally { this.asksBusy = false; cx.notify(); }
+      finally {
+        this.asksBusy = false;
+        if (this.personalView && this.viewSpace !== readingSpace) this.refreshAsks(cx);
+        cx.notify();
+      }
+    });
+  }
+
+  refreshScope(cx) {
+    this.snapshot();
+    if (this.readerSpace === this.viewSpace) return;
+    this.readerSpace = this.viewSpace;
+    this.asksChecked = 0;
+    this.refreshAsks(cx);
+    this.refreshMetadata(cx);
+    this.scan(cx);
+    cx.notify();
+  }
+
+  watchScope(cx) {
+    this.readerSpace = this.viewSpace;
+    cx.spawn(async cx => {
+      try {
+        for (;;) {
+          // Herdr owns this screen's selected space in view.json. Watch its event,
+          // not Project/Work files, and do not create tasks from render.
+          const paths = await watchFolder(appHome());
+          if (paths.some(path => pathKey(path).split('/').at(-1) === 'view.json')) this.refreshScope(cx);
+        }
+      } catch { /* Existing clock/manual refresh remains available if the watch is unavailable. */ }
     });
   }
 
