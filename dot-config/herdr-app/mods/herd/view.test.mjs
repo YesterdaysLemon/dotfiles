@@ -447,6 +447,17 @@ test('a grid copy starts no readers and consumes the sidebar quote without persi
   facts.forgetFacts(owner);
 });
 
+test('grid tiles fit a narrow pane at app zoom while quiet seats remain visible', () => {
+  const record = { institution: 'sample', space: 's1', tab: 'tab', focusPane: 'p1', token: 'fixture' };
+  const { view, native, sharedState } = harness(new Map(), undefined, undefined, { grid: record }, { zoom: 2 });
+  native.panes.push({ pane: 'pg', tab: 'tab', mod: 'herd' });
+  sharedState.set('herd.gridPanes', { tab: { ...record, pane: 'pg' } });
+  view.init({}, { timer: { every() {} } });
+  view.render().values.on_size_change({ width: 500, height: 700 }, { notify() {} });
+  const tile = find(view.render(), 'herd-grid-seat-t1');
+  assert.equal(tile.values.w, 194); assert.equal(tile.values.opacity, 0.68);
+});
+
 test('opening a grid guards rapid clicks and creates only a new owned mod pane', async () => {
   let resolve;
   const commands = [];

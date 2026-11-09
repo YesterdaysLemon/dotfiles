@@ -621,17 +621,18 @@ export default class Herd extends View {
     const history = consumeFacts(seats, now).history;
     this.history = stateHistory({ ...this.history, ...history }, seats, now);
     this.historyDirty = true;
-    const columns = Math.min(Math.max(1, seats.length), Math.max(1, Math.floor((this.width - 26) / 334)));
-    const tileWidth = Math.max(180, Math.min(420, (this.width - 40 - (columns - 1) * 14) / columns));
-    return v_flex().id('herd-grid').size_full().min_h(0).p(20).gap(16).bg(t.canvas)
+    const zoom = Number(settings().zoom) > 0 ? Number(settings().zoom) : 1, width = this.width / zoom;
+    const columns = Math.min(Math.max(1, seats.length), Math.max(1, Math.floor((width - 26) / 334)));
+    const tileWidth = Math.max(100, Math.min(420, (width - 56 - (columns - 1) * 14) / columns));
+    return v_flex().id('herd-grid').size_full().min_w(0).min_h(0).p(20).gap(16).bg(t.canvas)
       .on_size_change((size, cx) => { if (this.width !== size.width) { this.width = size.width; cx.notify(); } })
-      .child(h_flex().gap(12).items_center()
+      .child(h_flex().gap(12).items_center().flex_wrap()
         .child(v_flex().flex_1().min_w(0).gap(4)
           .child(div().truncate().text_size(21).font_semibold().text_color(t.foreground).child(group?.name || 'Institution'))
           .child(div().text_size(11).text_color(t.dim).child(`${seats.length} seats · ${this.personalView ? 'live state and sourced sentences' : 'metadata only'}`)))
         .child(this.askButton('herd-grid-terminals', 'Terminals', cx => this.returnGrid(actual, cx), t, this.gridBusy)))
       .when(Boolean(this.gridError), el => el.child(div().text_size(11).text_color(t.blocked).child(this.gridError)))
-      .child(v_flex().id('herd-grid-scroll').flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().id('herd-grid-scroll').flex_1().min_w(0).min_h(0).overflow_y_scrollbar()
         .when(!seats.length, el => el.child(div().p(12).text_size(13).text_color(t.muted).child('No seats remain in this institution.')))
         .child(h_flex().gap(14).flex_wrap().items_start().justify_center().children(seats.map(seat => {
           const quote = this.personalView ? quoteState(seat, this.cache, now, home(), actual.space) : null;
