@@ -4,7 +4,7 @@ import { v_flex, h_flex, InputState, Input } from 'gpui-base';
 import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
-import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages } from './asks.mjs';
+import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages, scriptSpace } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
 
@@ -33,6 +33,7 @@ export default class Herd extends View {
     this.asksBusy = false;
     this.askSource = props()?.askSource || null;
     this.answerStates = {};
+    this.scriptStates = {};
     this.askInputs = {};
     this.evidence = {};
     this.evidenceBusy = false;
@@ -214,6 +215,35 @@ export default class Herd extends View {
     this.asksChecked = 0;
   }
 
+  openAskTerminal(ask, cx) {
+    if (this.scriptStates?.[ask.id]?.busy || this.scriptStates?.[ask.id]?.opened) return;
+    this.snapshot();
+    if (!this.personalView || !ask.run || !personalFolder(ask.owner_project, home())) return;
+    this.scriptStates[ask.id] = { busy: true };
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const helper = appHome() + '/mods/herd/script-runner.mjs';
+        const request = { id: ask.id, run: ask.run, project: ask.owner_project, home: home() };
+        const result = await exec('node', [helper, 'check', JSON.stringify(request)], { timeout: 120000 });
+        if (result.code !== 0) throw new Error(result.stderr?.trim().slice(0, 250) || 'The committed script is unavailable.');
+        const script = JSON.parse(result.stdout);
+        if (!personalFolder(script.project, home()) || !/^[0-9a-f]{40,64}$/.test(script.commit) || !/^[0-9a-f]{64}$/.test(script.digest) ||
+            typeof script.token !== 'string' || !/^[A-Za-z0-9_-]{1,16000}$/.test(script.token)) throw new Error('Invalid script check.');
+        this.snapshot();
+        const target = this.personalView && scriptSpace(ask, this.askerGroups || [], this.allSpaces || [], this.viewSpace, home(), this.infos);
+        if (!target) throw new Error('Open this ask in a personal space to run its script.');
+        const reply = await exec('herdr-app', ['do', 'tab.new', JSON.stringify({ space: target, folder: script.project, name: ask.id,
+          argv: ['node', helper, 'launch', script.token] })], { timeout: 10000 });
+        const created = reply.code === 0 && JSON.parse(reply.stdout);
+        if (!created?.tab || !created?.terminal || created.error) throw new Error('The terminal did not open.');
+        this.scriptStates[ask.id] = { opened: true };
+        if (props()?.overlay) closeOverlay(props().overlay);
+      } catch (error) { this.scriptStates[ask.id] = { error: String(error.message || 'The terminal did not open.').slice(0, 250) }; }
+      finally { cx.notify(); }
+    });
+  }
+
   loadEvidence(cx) {
     if (this.evidenceBusy || !this.askList) return;
     this.evidenceBusy = true;
@@ -268,6 +298,11 @@ export default class Herd extends View {
             .when(evidence?.status !== 'ready', el => el.child(div().text_size(10).text_color(t.dim).child(`${path} · ${evidence ? 'preview unavailable' : 'loading preview…'}`)));
         }))
         .when(Boolean(ask.blocks), el => el.child(div().text_size(11).text_color(t.muted).child(`Waiting: ${ask.blocks}`)))
+        .when(Boolean(ask.run), el => el.child(h_flex().gap(8).items_center()
+          .child(this.askButton(`herd-run-${ask.id}`, this.scriptStates?.[ask.id]?.busy ? 'Checking script…' : this.scriptStates?.[ask.id]?.opened ? 'Opened terminal' : 'Open terminal', cx => this.openAskTerminal(ask, cx), t,
+            Boolean(!writable || this.scriptStates?.[ask.id]?.busy || this.scriptStates?.[ask.id]?.opened)))
+          .child(div().text_size(10).text_color(t.dim).child(ask.run))))
+        .when(Boolean(this.scriptStates?.[ask.id]?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(this.scriptStates[ask.id].error)))
         .when(Boolean(ask.recommendation && !ask.options?.length), el => el.child(div().text_size(11).text_color(t.muted).child(`Recommended: ${ask.recommendation}`)))
         .when(Boolean(this.askInputs?.[ask.id]), el => el.child(Input.new(this.askInputs[ask.id]).id(`herd-answer-input-${ask.id}`).h(36).px(9).rounded(6).border(1).border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)
           .disabled(Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable))))
@@ -321,6 +356,7 @@ export default class Herd extends View {
 
   snapshot() {
     const allSpaces = spaces();
+    this.allSpaces = allSpaces;
     const groups = projectHerd({ agents: agents(), terminals: terminals(), panes: panes(), spaces: allSpaces });
     this.askerGroups = groups;
     this.viewSpace = props()?.space || focused()?.space;

@@ -40,6 +40,13 @@ Inbox reads allow 120 seconds and show Checking while retaining the last list; s
 seconds inside a 100-second exec. Preserve the last list with a stale indicator on refresh failure. Ask evidence uses only explicitly named committed
 PNG paths within the owning project, through the existing bounded reader and app-home cache; no writes under mods/.
 
+The rough ask terminal card preserves the optional kit `run` path. An explicit Open terminal click validates the
+owning personal repository through the kit's read-only `_asks-run-check` gate, HEAD regular-file mode and unchanged working bytes, then opens an ask-ID-labelled tab
+in the owning institution's personal space or the current personal space. Never Work or remote. The initial card
+supports `.ps1` scripts only: Windows PowerShell on Windows, `pwsh` elsewhere. `script-runner.mjs` rechecks HEAD and
+the file digest inside the terminal before launching with inherited stdio and argv, never a shell command string.
+No live renewal or real-ask execution in tests; use a harmless committed scratch script. Include the helper in install.
+
 `sentences.mjs` recognizes bounded literal Codex assistant prose. It skips queued input, menus, tool bodies,
 credential-like assignments and ambiguous frames. A missing/expired quote stays unavailable on hover only; never invent
 a summary or derive it from a stale terminal title. Test scope/program/pane changes, read-budget sharing, no quote

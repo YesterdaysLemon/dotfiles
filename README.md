@@ -96,12 +96,22 @@ on each answer. Card headers show the current personal asker's familiar and name
 initial when the holder is missing or ambiguous. Work and remote seats provide no faces. Click an option, optionally
 adding a note, or send a free answer. Each explicit click runs one args-array
 `seats answer` call as Al in the owning personal project; the kit records and routes it to the asker. The card stays
-disabled while sending. Only exit 0 and the matching ask ID show Sent; errors and timeouts remain visible for review.
+disabled while sending. Exit 0 and the matching ask ID show Sent. After a failed receipt, the owning ledger confirms
+the exact ID, Al as answerer and the submitted text; an unavailable check offers Check delivery without resending.
 Answering requires Node; on Windows the launcher passes arguments to the installed Bash seats script through Git Bash,
 so multiline notes and shell metacharacters remain literal. Missing owner metadata leaves the ask read-only.
 Named committed PNGs appear inline through the same bounded app-home cache, with no writes under mods. Work stays out.
-A failed refresh keeps the last list marked stale. Confirmed sends disappear across open views; no answers or drafts
+Slow refreshes show Checking and retain the last list for up to 120 seconds; a failed refresh marks it stale.
+Confirmed sends disappear across open views; no answers or drafts
 are persisted in mod state. Config watchers plus slow polling refresh the per-institution snapshots; they are not globally atomic.
+
+An ask with a committed `.ps1` `run` path gets a plain Open terminal button. It uses the kit's read-only
+`_asks-run-check` gate and checks HEAD plus working bytes, then opens a tab labelled with the ask ID in the owning
+institution's personal space (or the current personal space). The launcher checks again before running Windows
+PowerShell, or `pwsh` on other systems, with inherited terminal input/output. Other suffixes are unsupported in this
+first slice. Work/remote spaces, linked paths and modified/uncommitted scripts cannot launch. The launch request
+is one encoded argv token, so Herdr's interactive shell preserves its quotes and paths. Running a script does not
+answer its ask.
 
 ## raycast extensions
 

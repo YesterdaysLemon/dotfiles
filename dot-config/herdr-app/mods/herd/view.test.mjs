@@ -40,7 +40,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   const sharedState = new Map();
   const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {} }) };
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
-    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages',
+    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
@@ -61,7 +61,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   view.personalView = true;
   view.width = 340;
   view.lastCheck = Date.now();
-  view.answerStates = {}; view.askInputs = {}; view.evidence = {};
+  view.answerStates = {}; view.askInputs = {}; view.evidence = {}; view.scriptStates = {};
   view.cache = { t1: { checked: Date.now(), cwd: model.pathKey(seat.cwd), prompt: { id: 'claude-trust', title: 'Folder trust', key: 'Enter', quote: 'Do you trust the files in this folder?' } } };
   return { view, seat, calls, storage, sharedState };
 }
@@ -422,4 +422,47 @@ test('a screen moved to Work while its read was in flight never becomes a quote'
   view.scan(cx); await task;
   assert.deepEqual(view.cache, {});
   assert.equal(find(view.render(), 'herd-quote-t1'), null);
+});
+
+
+test('Open terminal checks the script before launching one ID-labelled tab in a personal space', async () => {
+  const commands = [], owner = 'C:/Users/example/Project/sample';
+  const { view, seat } = harness(new Map(), async (command, args) => {
+    commands.push({ command, args });
+    if (command === 'node') return { code: 0, stdout: JSON.stringify({ project: owner, commit: 'a'.repeat(40), digest: 'b'.repeat(64), token: 'fixture_encoded_request' }) };
+    return { code: 0, stdout: '{"tab":"new-tab","terminal":"fixture"}' };
+  });
+  seat.space = 'personal'; view.viewSpace = 'personal';
+  view.askerGroups = [{ key: 'sample', workspace: 'sample', seats: [seat] }];
+  view.allSpaces = [{ id: 'personal', folder: owner }, { id: 'work', folder: 'C:/Users/example/Work/example' }];
+  const ask = { id: 'sample:run', from: 'sample/guide', to: 'al', state: 'open', question: 'Run this?', owner_project: owner, run: 'tools/setup.ps1' };
+  view.askList = [ask];
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  const button = find(view.render(), 'herd-run-' + ask.id);
+  button.click({}, cx); button.click({}, cx);
+  assert.equal(commands.length, 1, 'rapid clicks cannot start another validation or tab');
+  await task;
+  assert.equal(commands.length, 2);
+  assert.equal(commands[0].args[1], 'check');
+  const tab = JSON.parse(commands[1].args[2]);
+  assert.deepEqual([commands[1].command, ...commands[1].args.slice(0, 2)], ['herdr-app', 'do', 'tab.new']);
+  assert.equal(tab.space, 'personal'); assert.equal(tab.name, ask.id); assert.equal(tab.folder, owner);
+  assert.equal(tab.argv[0], 'node'); assert.equal(tab.argv[2], 'launch');
+  assert.equal(tab.argv[3], 'fixture_encoded_request');
+  assert.equal(view.scriptStates[ask.id].opened, true);
+});
+
+test('a changed script or a space that becomes Work cannot open a terminal', async () => {
+  for (const changed of [true, false]) {
+    const commands = [];
+    const { view } = harness(new Map(), async (...args) => {
+      commands.push(args);
+      if (!changed) view.personalView = false;
+      return changed ? { code: 1, stderr: 'The script differs from HEAD.' } : { code: 0, stdout: JSON.stringify({ project: 'C:/Users/example/Project/sample', commit: 'a'.repeat(40), digest: 'b'.repeat(64), token: 'fixture_encoded_request' }) };
+    });
+    const ask = { id: 'sample:run', owner_project: 'C:/Users/example/Project/sample', run: 'tools/setup.ps1' };
+    let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+    view.openAskTerminal(ask, cx); await task;
+    assert.equal(commands.length, 1); assert.ok(view.scriptStates[ask.id].error);
+  }
 });
