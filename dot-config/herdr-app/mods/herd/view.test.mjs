@@ -103,7 +103,7 @@ test('observed history persists outside render and survives a fresh view reload'
   assert.ok(first.storage.has('herd.states'));
   const reloaded = harness(first.storage).view;
   reloaded.scan = () => {};
-  reloaded.init({}, { spawn() {}, timer: { every() {} } });
+  reloaded.init({}, { notify() {}, spawn() {}, timer: { every() {} } });
   reloaded.render();
   assert.equal(reloaded.history.t1.at, observedAt);
 });
@@ -142,7 +142,7 @@ test('asks refresh invokes only the aggregate reader, and ask clicks open detail
   const { view, seat, calls } = harness(new Map(), async (...args) => { commands.push(args); return { code: 0, stdout: JSON.stringify([ask]) }; });
   view.snapshot = () => [{ key: 'sample', workspace: 'sample', seats: [seat] }];
   let task;
-  view.refreshAsks({ spawn: body => { task = body({ notify() {} }); } });
+  view.refreshAsks({ notify() {}, spawn: body => { task = body({ notify() {} }); } });
   await task;
   assert.deepEqual(commands[0].slice(0, 2), ['seats', ['--project', seat.cwd, 'asks', '--to', 'al', '--all', '--open', '--json']]);
   assert.equal(view.asks.length, 1);
@@ -158,7 +158,7 @@ test('a failed asks refresh retains the last list and marks it stale', async () 
   view.snapshot = () => [{ key: 'sample', workspace: 'sample', seats: [seat] }];
   view.asks = [{ id: 'sample:old', question: 'Known open ask' }];
   let task;
-  view.refreshAsks({ spawn: body => { task = body({ notify() {} }); } });
+  view.refreshAsks({ notify() {}, spawn: body => { task = body({ notify() {} }); } });
   await task;
   assert.equal(view.asks[0].id, 'sample:old');
   assert.equal(view.asksError, true);
@@ -323,6 +323,71 @@ test('failed, timed-out and mismatched answer receipts stay visible; Work makes 
     ask.owner_project = 'C:/Users/example/Work/sample'; view.personalView = true;
     view.answerAsk(ask, 'Option A', { notify() {}, spawn() { assert.fail('Work owner cannot write'); } });
   }
+});
+
+test('a timeout or error after append confirms the exact answer and shows sent without another write', async () => {
+  for (const failure of [new Error('Timed out'), { code: 1, stderr: 'Notification failed' }, { code: 0, stdout: '' }]) {
+    const commands = [];
+    const { view, sharedState } = harness(new Map(), async (command, args, options) => {
+      const request = JSON.parse(args[1]); commands.push({ request, options });
+      if (request.mode === 'confirm') return { code: 0, stdout: '{"state":"sent"}' };
+      if (failure instanceof Error) throw failure;
+      return failure;
+    });
+    const ask = { id: 'sample:fixture', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', owner_project: 'C:/Users/example/Project/sample' };
+    view.askList = [ask]; view.prepareAskInputs(); view.askInputs[ask.id].set_value('Exact note');
+    let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+    view.answerAsk(ask, 'A', cx); await task;
+    assert.equal(commands.length, 2);
+    assert.equal(commands[0].request.answer, 'A\n\nExact note');
+    assert.deepEqual(commands[1].request, { ...commands[0].request, mode: 'confirm' });
+    assert.equal(commands[1].options.cwd, ask.owner_project);
+    assert.equal(view.answerStates[ask.id].sent, ask.from);
+    assert.equal(sharedState.get('herd.askOutcomes')[ask.id], ask.from);
+    view.answerAsk(ask, 'A', cx);
+    assert.equal(commands.length, 2, 'a confirmed answer cannot be sent twice');
+  }
+});
+
+test('unavailable delivery checks retain submitted text; Check delivery only reads, and open/closed outcomes stay distinct', async () => {
+  const commands = []; let state = null;
+  const { view } = harness(new Map(), async (_command, args) => {
+    const request = JSON.parse(args[1]); commands.push(request);
+    return request.mode === 'confirm' && state ? { code: 0, stdout: JSON.stringify({ state }) } : { code: 1 };
+  });
+  const ask = { id: 'sample:fixture', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', owner_project: 'C:/Users/example/Project/sample' };
+  view.askList = [ask]; view.prepareAskInputs(); view.askInputs[ask.id].set_value('Original answer');
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.answerAsk(ask, null, cx); await task;
+  assert.equal(view.answerStates[ask.id].unconfirmed, 'Original answer');
+  assert.equal(find(view.render(), 'herd-answer-send-' + ask.id).childNodes[0], 'Check delivery');
+  assert.equal(find(view.render(), 'herd-answer-input-' + ask.id).values.disabled, true);
+  view.askInputs[ask.id].set_value('Changed draft');
+  state = 'closed'; view.answerAsk(ask, null, cx); await task;
+  assert.equal(commands.length, 3); assert.equal(commands[2].mode, 'confirm');
+  assert.equal(commands[2].answer, 'Original answer');
+  assert.equal(view.answerStates[ask.id].closed, true);
+  view.answerStates[ask.id] = { unconfirmed: 'Original answer' };
+  state = 'open'; view.answerAsk(ask, null, cx); await task;
+  assert.equal(view.answerStates[ask.id].unconfirmed, undefined);
+  assert.match(view.answerStates[ask.id].error, /still shows this ask open/);
+});
+
+test('a slow inbox refresh shows checking with a generous timeout and keeps the last list until completion', async () => {
+  let resolve; const pending = new Promise(done => { resolve = done; });
+  const commands = [];
+  const { view } = harness(new Map(), async (...args) => { commands.push(args); return pending; });
+  const ask = { id: 'sample:old', from: 'sample/guide', to: 'al', state: 'open', question: 'Known open ask', opened_at: '2026-11-08T12:00:00Z' };
+  view.askList = [ask]; view.askSource = 'C:/Users/example/Project/sample'; view.asksError = true;
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.refreshAsks(cx);
+  assert.equal(view.asksBusy, true); assert.equal(view.asksError, false);
+  assert.equal(commands[0][2].timeout, 120000);
+  assert.equal(view.askList[0].id, ask.id);
+  assert.equal(find(view.render(), 'herd-refresh-asks').childNodes[0], 'Checking…');
+  resolve({ code: 0, stdout: '[]' }); await task;
+  assert.equal(view.asksBusy, false); assert.equal(view.asksError, false);
+  assert.deepEqual(view.askList, []);
 });
 
 test('a missing owner disables answers, and Work starts no evidence reads', async () => {
