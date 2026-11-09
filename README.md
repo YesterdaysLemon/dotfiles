@@ -40,6 +40,12 @@ and confirm there yourself. The mod never approves anything or sends keystrokes.
 While a recognized prompt is current, its seat and institution count as **Needs you**, even if the program has
 reported no status. A small screen label and tooltip distinguish that observation from the program's own report.
 
+The herd follows the selected space, using live space IDs and seat labels. Its liaison card comes first; pinned
+seats from another space stay reachable above the cards. Work uses labels, state, observed time and any self-reported
+terminal metadata only. It shows no familiar faces and runs no metadata, Git, artifact, screen or model readers.
+Personal prompt checks are active only in a personal space. No institution names are built in.
+
+
 The installer includes it while keeping `seats-main` as the default. To try it after installation:
 
 ```sh

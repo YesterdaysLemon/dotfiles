@@ -28,21 +28,26 @@ function find(node, id) {
   return null;
 }
 
-function harness(storage = new Map()) {
+function harness(storage = new Map(), execute = async () => ({ code: 1 })) {
   const calls = [];
-  const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen'];
+  const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
+    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
-  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'run', 'theme', 'shared', 'home', 'localStorage', ...names, source)(
+  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'run', 'theme', 'shared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'window', 'hc', ...names, source)(
     class {}, element, element, element, element, element,
     (...args) => calls.push(args), () => new Proxy({}, { get: (_, key) => String(key) }), () => [], () => 'C:/Users/example',
     { setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) ?? null },
-    ...names.map(name => model[name]),
+    () => ({}), execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]),
+    () => ({ platform: 'linux' }),
+    args => execute('hc', args),
+    ...names.map(name => ({ ...model })[name]),
   );
   const view = new Herd();
   const seat = { address: 't1', pane: 'p1', name: 'Sample', role: 'maker', status: 'idle', cwd: 'C:/Users/example/Project/sample', institution: 'sample' };
-  view.snapshot = () => [{ key: 'sample', name: 'Sample institution', status: 'idle', quiet: true, seats: [seat] }];
+  view.snapshot = () => [{ key: 'sample', name: 'Sample institution', workspace: 'sample', status: 'idle', quiet: true, seats: [seat] }];
   view.history = {};
+  view.personalView = true;
   view.width = 340;
   view.lastCheck = Date.now();
   view.cache = { t1: { checked: Date.now(), cwd: model.pathKey(seat.cwd), prompt: { id: 'claude-trust', title: 'Folder trust', key: 'Enter', quote: 'Do you trust the files in this folder?' } } };
@@ -89,4 +94,41 @@ test('observed history persists outside render and survives a fresh view reload'
   reloaded.init({}, { spawn() {}, timer: { every() {} } });
   reloaded.render();
   assert.equal(reloaded.history.t1.at, observedAt);
+});
+
+test('a non-personal space suppresses all readers even with a personal pinned liaison', async () => {
+  const commands = [];
+  const { view, seat } = harness(new Map(), async (...args) => { commands.push(args); return { code: 1 }; });
+  seat.pinned = true;
+  seat.role = 'liaison';
+  view.personalView = false;
+  view.cache = {};
+  view.infos = {};
+  view.artifacts = {};
+  const tasks = [];
+  const cx = { notify() {}, spawn: body => { const task = body(cx); tasks.push(task); return task; } };
+  view.scan(cx);
+  await Promise.all(tasks);
+  assert.deepEqual(commands, []);
+  assert.equal(find(view.render(), 'herd-refresh'), null);
+});
+
+test('a space transition schedules one fresh data check rather than waiting for the polling cadence', () => {
+  const { view } = harness();
+  view.viewSpace = 's1';
+  const jobs = [];
+  const reads = [];
+  view.scan = () => reads.push('screen');
+  const cx = { timer: { after: (_ms, callback) => jobs.push(callback) } };
+  view.render(cx);
+  view.render(cx);
+  assert.equal(jobs.length, 1);
+  jobs[0]({});
+  assert.deepEqual(reads, ['screen']);
+  view.viewSpace = 's2';
+  view.render(cx);
+  assert.equal(jobs.length, 2);
+  view.viewSpace = 's3';
+  jobs[1]({});
+  assert.equal(reads.length, 1, 'a superseded scope cannot start old readers');
 });

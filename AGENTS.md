@@ -13,8 +13,10 @@ retain only a recognized quote. They never send keystrokes or approve a prompt.
 Work in a separate worktree. Cross-lab review is required before implementation reaches the default branch.
 Use explicit owned paths when staging/committing. Preserve unrelated configurations and the live fallback.
 Run the tests and native check below, then inspect `herdr-app status` and a real `herdr-app shot`.
-The native check cannot validate deferred UI states. Review previews may scope the mod with `props.space` and
-`props.personalOnly`; identify synthetic prompt fixtures plainly and restore the original layout afterwards.
+The native check cannot validate deferred UI states. The herd follows the focused space (or explicit `props.space`
+for a scoped pane). Identify synthetic fixtures plainly and restore the prior layout after review. Space membership
+and pinned access come from live labels, never private institution names. Non-personal views use metadata only,
+without faces or any reader; local liaison cards lead. Test both space scopes with a neutral body, not Work screens.
 
 <!-- al-stack:project:start -->
 ## Al-stack project

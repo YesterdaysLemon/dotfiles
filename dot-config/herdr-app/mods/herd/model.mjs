@@ -53,8 +53,9 @@ export function projectHerd(snapshot) {
     const agent = agentByAddress.get(address) ?? {};
     const pane = paneByAddress.get(address) ?? {};
     const labels = terminal.labels ?? {};
-    const space = agent.space ?? labels['herdr.space'];
     const machine = address.includes('/') ? address.split('/')[0] : '';
+    const localSpace = labels['herdr.space'];
+    const space = agent.space ?? (machine && localSpace ? `${machine}/${localSpace}` : localSpace);
     const institution = labels.seats || null;
     const key = institution ? `${machine}:institution:${institution}` : `${machine}:space:${space || 'other'}`;
     const name = institution ? basename(institution).replace(/[-_]+/g, ' ') : spaces.get(space)?.name || agent.space_name || 'Other agents';
@@ -69,9 +70,12 @@ export function projectHerd(snapshot) {
       status, app: agent.app || terminal.report?.app || terminal.program?.key || '',
       program: agent.program || terminal.program || null,
       focused: Boolean(agent.focused || pane.focused),
+      pinned: Boolean(agent.pinned || labels['herdr.pinned'] === 'true' || labels['herdr.pinned'] === '1'),
+      statusLine: String(terminal.status_line || terminal.report?.status_line || terminal.report?.message ||
+        (/claude/i.test(agent.app || terminal.program?.key || '') && agent.title !== agent.program?.name ? agent.title || '' : '')).replace(/[\r\n]+/g, ' ').slice(0, 180),
       fixture: labels['herd.fixture'] === 'true',
     };
-    if (!groups.has(key)) groups.set(key, { key, name, machine, seats: [] });
+    if (!groups.has(key)) groups.set(key, { key, name, machine, workspace: institution, seats: [] });
     groups.get(key).seats.push(seat);
   }
   return [...groups.values()].map(group => ({
