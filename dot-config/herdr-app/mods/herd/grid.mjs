@@ -1,6 +1,20 @@
 // Native grid structure and navigation, independent of paint and readers.
 const id = value => typeof value === 'string' && value.length > 0 && value.length < 240 && !/[\x00-\x1f]/.test(value);
 
+// Exact factors fill every cell; tiny panes scroll rather than crush the text.
+export function gridGeometry(count, width, height) {
+  count = Math.max(1, count); width = Math.max(100, width); height = Math.max(160, height);
+  const gutter = 6; let columns = 1, score = Infinity;
+  for (let candidate = 1; candidate <= count; candidate++) {
+    if (count % candidate || (candidate > 1 && width / candidate < 130)) continue;
+    const rows = count / candidate, w = (width - gutter * (candidate - 1)) / candidate, h = (height - gutter * (rows - 1)) / rows;
+    const fit = Math.abs(Math.log(w / Math.max(1, h)));
+    if (fit < score) { score = fit; columns = candidate; }
+  }
+  const rows = count / columns;
+  return { columns, rows, gutter, width: (width - gutter * (columns - 1)) / columns, height: Math.max(160, (height - gutter * (rows - 1)) / rows) };
+}
+
 export function validateGrid(value, pane, panes, spaces) {
   if (!value || !['institution', 'space', 'tab', 'focusPane', 'token'].every(key => id(value[key])) ||
       (value.zoomPane != null && !id(value.zoomPane)) || !id(pane)) return null;
