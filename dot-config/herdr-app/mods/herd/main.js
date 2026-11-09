@@ -161,18 +161,9 @@ export default class Herd extends View {
       .child(div().text_size(9.5).text_color(t.dim).child(`${prompt.title} · open to review${prompt.fixture ? ' · fixture' : ''}`));
   }
 
-  render(cx) {
+  render() {
     const t = theme();
     const groups = this.snapshot();
-    if (cx && this.viewSpace !== this.scheduledSpace) {
-      this.scheduledSpace = this.viewSpace;
-      const space = this.viewSpace;
-      // One deferred data refresh per space transition, never a live-data poll.
-      cx.timer.after(25, cx => {
-        if (this.viewSpace !== space) return;
-        this.scan(cx);
-      });
-    }
     const seats = groups.flatMap(group => group.seats);
     const now = Date.now();
     const next = stateHistory(this.history, seats, now);

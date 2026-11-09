@@ -113,22 +113,13 @@ test('a non-personal space suppresses all readers even with a personal pinned li
   assert.equal(find(view.render(), 'herd-refresh'), null);
 });
 
-test('a space transition schedules one fresh data check rather than waiting for the polling cadence', () => {
-  const { view } = harness();
+test('render schedules no tasks or timers when the selected space changes', () => {
+  const { view, calls } = harness();
+  const forbidden = () => assert.fail('render must remain free of task and timer creation');
+  const cx = { spawn: forbidden, timer: { after: forbidden, every: forbidden } };
   view.viewSpace = 's1';
-  const jobs = [];
-  const reads = [];
-  view.scan = () => reads.push('screen');
-  const cx = { timer: { after: (_ms, callback) => jobs.push(callback) } };
   view.render(cx);
-  view.render(cx);
-  assert.equal(jobs.length, 1);
-  jobs[0]({});
-  assert.deepEqual(reads, ['screen']);
   view.viewSpace = 's2';
   view.render(cx);
-  assert.equal(jobs.length, 2);
-  view.viewSpace = 's3';
-  jobs[1]({});
-  assert.equal(reads.length, 1, 'a superseded scope cannot start old readers');
+  assert.deepEqual(calls, []);
 });
