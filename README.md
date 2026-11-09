@@ -43,8 +43,7 @@ reported no status. A small screen label and tooltip distinguish that observatio
 The herd follows the selected space, using live space IDs and seat labels. Its liaison card comes first; pinned
 seats from another space stay reachable above the cards. Work uses labels, state, observed time and any self-reported
 terminal metadata only. It shows no familiar faces and runs no metadata, Git, artifact, screen or model readers.
-Personal prompt checks are active only in a personal space. No institution names are built in.
-
+Personal previews and prompt checks are active only in a personal space. No institution names are built in.
 
 The installer includes it while keeping `seats-main` as the default. To try it after installation:
 
@@ -58,9 +57,30 @@ herdr-app do layout.switch --name seats-main
 Prompt checks are local, only for quiet/waiting personal seats under `~/Project`; `~/Work`, remote terminals and
 working seats are excluded. At most four current screens are checked every 45 seconds, cached for 90 seconds.
 Only a recognized quote is retained in memory. Unrecognized prompts can be missed; the strip is not an all-clear.
-`herd.screenRoots` in local mod shared state can add personal roots, while Work stays excluded. The asks ledger,
-artifact thumbnails and model summaries are later phases. Run the pure scope/grouping/prompt tests with
+`herd.screenRoots` in local mod shared state can add personal roots, while Work stays excluded. Model summaries
+remain a later phase. Run the pure scope/grouping/prompt tests with
 `node --test dot-config/herdr-app/mods/herd/*.test.mjs`.
+
+Institutions can opt into an artifact thumbnail by committing a repo-relative image glob in their tracked
+`seats.conf`, for example `SEATS_ARTIFACT='renders/approved/*.png'`. The personal seats kit's `seats info --json`
+interface is the only config parser. The herd view caches that metadata, watches its config directory, and uses a
+slow polling fallback. Work and remote institutions deliberately retain their live label/state view, without
+metadata, Git or image reads. No key, an unavailable metadata command, or an uncommitted config means no thumbnail.
+
+The latest artifact is the newest commit touching the declared selection, with a stable lexical tie break for
+multiple images in that commit. Its card shows a content-keyed preview and commit provenance; click it for a larger
+preview. The institution owns the declaration's approval meaning. The view neither guesses from modification
+times nor independently approves an image. Missing/deleted images and absent local Git LFS data leave an empty slot;
+the reader never downloads or hydrates LFS objects.
+
+The optional reader uses Node and Git, with no npm packages or image decoder. This first version accepts PNG
+showcase globs. It checks the PNG header's dimensions, caps source files at 16 MiB and 32 million pixels, and
+lets GPUI scale the original committed PNG. The application home's `herd-cache/` holds at most 24 copies and 12 MiB; images that
+cannot fit leave the slot empty. Concurrent writers use a bounded process lock outside the watched mod tree and atomic file replacement.
+Cache misses and hits change no mod asset or directory, so they cannot trigger a reload loop.
+Test it with `node --test dot-config/herdr-app/mods/herd/artifact-reader.test.mjs`.
+Git must support `--no-lazy-fetch` (verified here with Git 2.51); unsupported versions leave the slot empty instead
+of allowing a partial clone to fetch image objects implicitly.
 
 ## raycast extensions
 

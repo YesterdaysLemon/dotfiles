@@ -1,8 +1,9 @@
 // Cloned from seat-agents. Institution-first projection, without a model.
 import { View, div, image, svg } from 'gpui-kit';
 import { v_flex, h_flex } from 'gpui-base';
-import { agents, terminals, panes, spaces, focused, run, theme, shared, home, hc, props, nextCommand } from 'herdr';
+import { agents, terminals, panes, spaces, focused, run, theme, shared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
+import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
@@ -10,22 +11,113 @@ const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states
 
 export default class Herd extends View {
   init(_props, cx) {
+    this.preview = acceptArtifact(props()?.artifactPreview);
+    if (this.preview) return;
     this.history = stored();
     this.historyDirty = false;
     this.cache = {};
     this.width = 340;
     this.scanning = false;
     this.lastCheck = 0;
+    this.artifacts = {};
+    this.infos = {};
+    this.watchedConfigs = new Set();
+    this.metadataBusy = false;
     this.scan(cx);
+    this.refreshMetadata(cx);
 
     cx.spawn(async cx => {
       for (;;) {
-        if (await nextCommand() === 'refresh') { this.scan(cx); }
+        if (await nextCommand() === 'refresh') { this.scan(cx); this.refreshMetadata(cx); }
       }
     });
     // Persist observed state outside render. These are data/clock timers, not animation.
     cx.timer.every(30000, cx => { this.saveHistory(); cx.notify(); });
     cx.timer.every(45000, cx => this.scan(cx));
+    cx.timer.every(60000, cx => this.refreshMetadata(cx));
+  }
+
+  watchConfig(folder, cx) {
+    if (this.watchedConfigs.has(folder) || this.watchedConfigs.size >= 24 || !personalFolder(folder, home())) return;
+    this.watchedConfigs.add(folder);
+    cx.spawn(async cx => {
+      try {
+        for (;;) {
+          const changed = await watchFolder(folder);
+          if (!configChanges(changed, folder)) continue;
+          for (const entry of Object.values(this.infos)) if (entry.info?.config_dir === folder) entry.checked = 0;
+          // The one-second pause coalesces bursts of mail/name/config writes.
+          await cx.sleep(1000);
+          this.refreshMetadata(cx);
+
+        }
+      } catch { this.watchedConfigs.delete(folder); } // Slow polling remains available.
+    });
+  }
+
+  refreshMetadata(cx) {
+    if (this.metadataBusy) return;
+    this.metadataBusy = true;
+    cx.spawn(async cx => {
+      try {
+        const groups = this.snapshot();
+        if (!this.personalView) return;
+        const candidates = groups.map(group => ({ group, cwd: artifactSource(group, home()) }))
+          .filter(({ group, cwd }) => cwd && (!this.infos[group.key] || this.infos[group.key].cwd !== cwd || Date.now() - this.infos[group.key].checked >= INFO_TTL))
+          .sort((a, b) => (this.infos[a.group.key]?.checked ?? 0) - (this.infos[b.group.key]?.checked ?? 0)).slice(0, 4);
+        for (const { group, cwd } of candidates) {
+          const before = this.snapshot().find(g => g.key === group.key);
+          if (!this.personalView) break;
+          if (!before || artifactSource(before, home()) !== cwd) continue;
+          let info = null;
+          let artifact = null;
+          try {
+            const result = await exec(seatsExecutable(window()?.platform), ['--project', cwd, 'info', '--json'], { timeout: 20000 });
+            if (result.code === 0) info = acceptInfo(JSON.parse(result.stdout), group, home());
+            this.snapshot();
+            if (!this.personalView) break;
+            if (info?.artifact_state === 'ready' && typeof info.artifact === 'string' && info.artifact) {
+              const preview = await exec('node', [appHome() + '/mods/herd/artifact-reader.mjs', '--repo', info.project, '--glob', info.artifact,
+                '--home', home(), '--app-home', appHome()], { timeout: 15000 });
+              if (preview.code === 0) artifact = acceptArtifact(JSON.parse(preview.stdout));
+            }
+          } catch { /* Missing metadata support deliberately leaves the label-only fallback. */ }
+          const live = this.snapshot().find(g => g.key === group.key);
+          if (!this.personalView || !live || artifactSource(live, home()) !== cwd) continue;
+          this.infos[group.key] = { checked: Date.now(), cwd, info };
+          this.artifacts[group.key] = artifact;
+          if (info) this.watchConfig(info.config_dir, cx);
+        }
+        const eligible = new Set(this.snapshot().filter(g => artifactSource(g, home())).map(g => g.key));
+        for (const key of Object.keys(this.infos)) if (!eligible.has(key)) { delete this.infos[key]; delete this.artifacts[key]; }
+      } finally {
+        this.metadataBusy = false;
+
+        cx.notify();
+      }
+    });
+  }
+
+  showArtifact(artifact) {
+    openOverlay({ mod: 'herd', kind: 'dialog', width: 820, height: 650, props: { artifactPreview: artifact } });
+  }
+
+  artifactView(artifact, t, width, maxHeight) {
+    const fit = fitArtifact(artifact, width, maxHeight);
+    return v_flex().gap(4)
+      .child(h_flex().w_full().justify_center().rounded(7).bg(t.canvas).overflow_hidden()
+        .child(image(artifact.image).w(fit.width).h(fit.height)))
+      .child(div().text_size(9.5).text_color(t.dim).truncate().child(`Latest artifact · ${artifact.commit.slice(0, 7)}`));
+  }
+
+  previewView(t) {
+    const artifact = this.preview;
+    return v_flex().size_full().p(16).gap(12).bg(t.surface)
+      .child(h_flex().gap(10).items_center()
+        .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).truncate().child(artifact.path))
+        .child(div().id('herd-close-preview').p(6).text_color(t.muted).cursor_pointer().on_click(() => closeOverlay(props().overlay)).child('Close')))
+      .child(this.artifactView(artifact, t, 760, 520))
+      .child(div().text_size(10.5).text_color(t.muted).child('Selected by the institution’s declared showcase glob.'));
   }
 
   snapshot() {
@@ -130,6 +222,8 @@ export default class Herd extends View {
   }
 
   card(group, t, now, compact) {
+    const source = artifactSource(group, home());
+    const artifact = this.personalView && source && pathKey(this.infos?.[group.key]?.cwd) === pathKey(source) ? this.artifacts?.[group.key] : null;
     const counts = ['blocked', 'working', 'done'].map(status => {
       const count = group.seats.filter(s => s.status === status).length;
       return count ? `${count} ${STATE[status].toLowerCase()}` : null;
@@ -146,6 +240,10 @@ export default class Herd extends View {
         .child(div().flex_1().min_w(0).truncate().font_semibold().text_size(compact ? 10 : 13).text_color(group.quiet ? t.muted : t.foreground).child(compact ? group.name.slice(0, 2) : group.name))
         .when(!compact, el => el.child(div().text_size(10).text_color(t.dim).child(String(group.seats.length)))))
       .when(!compact, el => el.child(div().px(5).pb(4).text_size(10).text_color(t.dim).child(summary)))
+      .when(!compact && Boolean(artifact), el => el.child(div().id(`herd-artifact-${group.key}`).px(5).py(4).cursor_pointer()
+        .tooltip(`${artifact.path}\nCommit ${artifact.commit}\nOpen cached preview`)
+        .on_click((_event, cx) => { cx.stop_propagation(); this.showArtifact(artifact); })
+        .child(this.artifactView(artifact, t, this.width - 52, 160))))
       .children(group.seats.map(seat => this.seatRow(seat, t, now, compact)));
   }
 
@@ -163,6 +261,7 @@ export default class Herd extends View {
 
   render() {
     const t = theme();
+    if (this.preview) return this.previewView(t);
     const groups = this.snapshot();
     const seats = groups.flatMap(group => group.seats);
     const now = Date.now();

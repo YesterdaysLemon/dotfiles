@@ -15,6 +15,7 @@
 ["commands"]
 "check-herd" = "herdr-app check dot-config/herdr-app/mods/herd"
 "test-herd" = "node --test dot-config/herdr-app/mods/herd/*.test.mjs"
+"test-artifacts" = "node --test dot-config/herdr-app/mods/herd/artifact-reader.test.mjs"
 
 [["tools"]]
 "name" = "herdr-app"
@@ -25,3 +26,8 @@
 "name" = "node"
 "kind" = "cli"
 "command" = "node"
+
+[["tools"]]
+"name" = "git"
+"kind" = "cli"
+"command" = "git"

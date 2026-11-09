@@ -18,6 +18,11 @@ for a scoped pane). Identify synthetic fixtures plainly and restore the prior la
 and pinned access come from live labels, never private institution names. Non-personal views use metadata only,
 without faces or any reader; local liaison cards lead. Test both space scopes with a neutral body, not Work screens.
 
+Artifact metadata comes only from the personal seats kit's `seats info --json` schema v1. `artifacts.mjs` validates
+institution identity and local scope; `artifact-reader.mjs` reads the newest committed match of the declared glob and
+caches bounded committed PNGs under the application home's `herd-cache/`. Node and Git provide the optional artifact reader; no npm packages or image decoder are required. Keep cache files out of Git. No automatic LFS fetch, shell config parsing in the mod,
+uncommitted-image fallback, Work/remote reads or default layout activation. Run the Node checks.
+
 <!-- al-stack:project:start -->
 ## Al-stack project
 
@@ -30,10 +35,12 @@ Personal configuration files and native Herdr mods.
 Project commands:
 - check-herd: `herdr-app check dot-config/herdr-app/mods/herd`
 - test-herd: `node --test dot-config/herdr-app/mods/herd/*.test.mjs`
+- test-artifacts: `node --test dot-config/herdr-app/mods/herd/artifact-reader.test.mjs`
 
 Declared tools (verify availability in the intended agent):
 - herdr-app (cli): `herdr-app`.
 - node (cli): `node`.
+- git (cli): `git`.
 
 Edit project guidance outside this managed section. Use `al-stack configure` for its fields and `al-stack check .` for setup checks. Run the actual project checks for behavioral validation.
 <!-- al-stack:project:end -->

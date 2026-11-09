@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as model from './model.mjs';
+import * as artifacts from './artifacts.mjs';
 
 // Exercise the shipped view's real callbacks with a tiny GPUI description recorder.
 // Native layout/paint is checked separately by herdr-app and review screenshots.
@@ -41,7 +42,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 })) {
     () => ({}), execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]),
     () => ({ platform: 'linux' }),
     args => execute('hc', args),
-    ...names.map(name => ({ ...model })[name]),
+    ...names.map(name => ({ ...model, ...artifacts })[name]),
   );
   const view = new Herd();
   const seat = { address: 't1', pane: 'p1', name: 'Sample', role: 'maker', status: 'idle', cwd: 'C:/Users/example/Project/sample', institution: 'sample' };
@@ -96,6 +97,34 @@ test('observed history persists outside render and survives a fresh view reload'
   assert.equal(reloaded.history.t1.at, observedAt);
 });
 
+test('artifact clicks open a local preview and never change terminal focus', () => {
+  const { view, calls, seat } = harness();
+  view.artifacts = { sample: { status: 'ready', image: 'herd-cache/' + 'a'.repeat(64) + '.png', width: 320, height: 200, commit: 'b'.repeat(40), path: 'approved/sheet.png' } };
+  view.infos = { sample: { cwd: seat.cwd } };
+  const image = find(view.render(), 'herd-artifact-sample');
+  assert.ok(image);
+  image.click({}, { stop_propagation() {} });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'overlay');
+  assert.equal(calls[0][1].props.artifactPreview.image, view.artifacts.sample.image);
+  seat.cwd = 'C:/Users/example/Work/sample';
+  assert.equal(find(view.render(), 'herd-artifact-sample'), null, 'moving into Work drops the cached artifact immediately');
+});
+
+test('metadata refresh makes no calls for a Work institution', async () => {
+  const commands = [];
+  const { view, seat } = harness(new Map(), async (...args) => { commands.push(args); return { code: 1 }; });
+  seat.cwd = 'C:/Users/example/Work/sample';
+  view.snapshot = () => [{ key: 'sample', workspace: 'sample', seats: [seat] }];
+  view.infos = {};
+  view.artifacts = {};
+  let task;
+  view.refreshMetadata({ spawn: body => { task = body({ notify() {} }); } });
+  await task;
+  assert.deepEqual(commands, []);
+  assert.deepEqual(view.artifacts, {});
+});
+
 test('a non-personal space suppresses all readers even with a personal pinned liaison', async () => {
   const commands = [];
   const { view, seat } = harness(new Map(), async (...args) => { commands.push(args); return { code: 1 }; });
@@ -108,6 +137,7 @@ test('a non-personal space suppresses all readers even with a personal pinned li
   const tasks = [];
   const cx = { notify() {}, spawn: body => { const task = body(cx); tasks.push(task); return task; } };
   view.scan(cx);
+  view.refreshMetadata(cx);
   await Promise.all(tasks);
   assert.deepEqual(commands, []);
   assert.equal(find(view.render(), 'herd-refresh'), null);
@@ -122,4 +152,25 @@ test('render schedules no tasks or timers when the selected space changes', () =
   view.viewSpace = 's2';
   view.render(cx);
   assert.deepEqual(calls, []);
+});
+
+test('switching to a non-personal space during a preview stops the remaining metadata queue', async () => {
+  const commands = [];
+  const { view, seat } = harness(new Map(), async (command) => {
+    commands.push(command);
+    if (command === 'node') {
+      view.personalView = false;
+      return { code: 1 };
+    }
+    return { code: 0, stdout: JSON.stringify({ schema_version: 1, workspace: 'sample', project: seat.cwd,
+      config_dir: seat.cwd + '/.claude/seats', artifact_state: 'ready', artifact: 'approved/*.png' }) };
+  });
+  view.snapshot = () => ['sample', 'second'].map(key => ({ key, workspace: key, seats: [seat] }));
+  view.infos = {};
+  view.artifacts = {};
+  let task;
+  const cx = { notify() {}, spawn: body => { task = body(cx); } };
+  view.refreshMetadata(cx);
+  await task;
+  assert.deepEqual(commands, ['seats', 'node']);
 });

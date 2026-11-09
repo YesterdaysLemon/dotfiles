@@ -13,3 +13,5 @@ dot-config/karabiner/automatic_backups/
 dot-config/herdr-app/mods/*/gpui-kit.d.ts
 dot-config/herdr-app/mods/*/herdr.d.ts
 dot-config/herdr-app/mods/*/jsconfig.json
+dot-config/herdr-app/mods/herd/cache/
+dot-config/herdr-app/mods/herd/__pycache__/
