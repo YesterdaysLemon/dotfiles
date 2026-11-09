@@ -20,7 +20,7 @@ export default class Herd extends View {
     this.gridRequested = props()?.grid != null;
     this.albumRequested = props()?.album != null;
     if (this.albumRequested) {
-      this.album = Array.isArray(props().album) ? props().album.slice(0, 64).map(value => acceptArtifact(value) || acceptCardImage(value)).filter(Boolean) : [];
+      this.album = Array.isArray(props().album) ? props().album.slice(0, 70).map(value => acceptArtifact(value) || acceptCardImage(value)).filter(Boolean) : [];
       this.albumAt = Math.max(0, Math.min(this.album.length - 1, Number.isInteger(props().albumAt) ? props().albumAt : 0));
       this.albumZoom = 1; this.albumWidth = 1000; this.albumHeight = 720;
       this.albumFocus = cx.focus_handle(); this.albumFocus.focus();
@@ -282,7 +282,7 @@ export default class Herd extends View {
       .child(div().id('herd-album-viewport').flex_1().min_w(0).min_h(0).overflow_x_scrollbar().overflow_y_scrollbar()
         .child(h_flex().w(Math.max(fit.width * this.albumZoom, width)).h(Math.max(fit.height * this.albumZoom, height))
           .items_center().justify_center().child(image(current.image).w(fit.width * this.albumZoom).h(fit.height * this.albumZoom))))
-      .child(div().text_size(11).text_color(t.muted).truncate().child(current.path));
+      .child(div().text_size(11).text_color(t.muted).truncate().child(current.path + (current.provenance === 'changed' ? ' · changed since asked' : current.provenance === 'unrecorded' ? ' · identity at opening not recorded' : '')));
   }
 
   questionView(text, t) {
@@ -425,7 +425,7 @@ export default class Herd extends View {
     const helper = appHome() + '/mods/herd/card-runner.mjs';
     try {
       await writeTextFile(file, JSON.stringify({ project: ask.owner_project, card: ask.card, options: ask.options || [],
-        recommendation: ask.recommendation || null, expectedImages }), null);
+        recommendation: ask.recommendation || null, card_images: ask.card_images ?? null, expectedImages }), null);
       const result = await exec('node', [helper, 'check', home(), appHome(), file], { timeout: 100000 });
       if (result.code !== 0) throw new Error(result.stderr?.trim().slice(0, 400) || 'Card validation unavailable.');
       const card = acceptCardReceipt(JSON.parse(result.stdout));
@@ -502,10 +502,14 @@ export default class Herd extends View {
       .child(state?.error ? `Card unavailable: ${state.error}` : 'Checking card…');
     const blocked = Boolean(!this.personalView || !personalFolder(ask.owner_project, home()) || this.answerStates[ask.id]?.validating ||
       this.answerStates[ask.id]?.sending || this.answerStates[ask.id]?.unconfirmed || this.answerStates[ask.id]?.closed);
-    const picture = (path, caption) => {
+    const logicalWidth = this.width / (Number(settings().zoom) || 1);
+    const picture = (path, caption, width = Math.max(100, logicalWidth - 90), maxHeight = 220) => {
       const image = state.images.find(image => image.path === path);
-      return v_flex().gap(4).when(Boolean(image), el => el.child(this.artifactView(image, t, Math.max(100, this.width / (Number(settings().zoom) || 1) - 90), 220,
-        caption || 'Card image', cx => this.openCardAlbum(ask, path, cx))));
+      return v_flex().gap(4).when(Boolean(image), el => el.child(this.artifactView(image, t, width, maxHeight,
+        caption || 'Card image', cx => this.openCardAlbum(ask, path, cx))))
+        .when(image?.provenance === 'changed', el => el.child(div().text_size(10).text_color(t.blocked)
+          .tooltip(`Asked: ${image.askedSha256} · ${image.askedBytes} bytes\nCurrent: ${image.sha256} · ${image.bytes} bytes`)
+          .child(`Changed since asked · ${image.askedSha256?.slice(0,7)} → ${image.sha256.slice(0,7)}`)));
     };
     const node = id => {
       const element = state.card.elements[id], p = element.props;
@@ -513,11 +517,15 @@ export default class Herd extends View {
       if (element.type === 'text') return div().when(p.tone === 'strong', el => el.font_semibold())
         .child(this.questionView(p.text, p.tone === 'muted' ? {...t,foreground:t.muted} : t));
       if (element.type === 'image') return picture(p.path, p.caption);
-      if (element.type === 'options') return v_flex().gap(8).children(p.options.map((option, index) => v_flex().gap(6).p(8).rounded(7).border(1).border_color(t.input)
-        .when(Boolean(option.image), el => el.child(picture(option.image, option.label)))
-        .child(this.askButton(`herd-card-option-${ask.id}-${index}`, option.label + (option.label === p.recommended ? ' · recommended' : ''),
-          cx => this.answerCard(ask, option.label, cx), t, blocked, option.label === p.recommended))
-        .when(Boolean(option.detail), el => el.child(div().text_size(11).text_color(t.muted).child(option.detail)))));
+      if (element.type === 'options') {
+        const available = Math.max(120, logicalWidth - 112), columns = Math.min(p.options.length, available >= 1100 ? 4 : available >= 520 ? 2 : 1);
+        const width = (available - (columns - 1) * 8) / columns;
+        return h_flex().gap(8).flex_wrap().items_start().children(p.options.map((option, index) => v_flex().w(width).gap(6).p(8).rounded(7).border(1).border_color(t.input)
+          .when(Boolean(option.image), el => el.child(picture(option.image, option.label, Math.max(80, width - 18), 140)))
+          .child(this.askButton(`herd-card-option-${ask.id}-${index}`, option.label + (option.label === p.recommended ? ' · recommended' : ''),
+            cx => this.answerCard(ask, option.label, cx), t, blocked, option.label === p.recommended))
+          .when(Boolean(option.detail), el => el.child(div().text_size(11).text_color(t.muted).child(option.detail)))));
+      }
       if (element.type === 'table') return div().min_w(0).overflow_x_scrollbar().child(v_flex().gap(5).w(Math.max(200, p.columns.length * 120))
         .children([p.columns, ...p.rows].map((row, index) => h_flex().gap(8).when(index === 0, el => el.font_semibold())
           .children(row.map(cell => div().flex_1().min_w(0).text_size(11).text_color(t.foreground).child(cell))))));
@@ -527,6 +535,7 @@ export default class Herd extends View {
       return div().child('Unsupported card element.');
     };
     return v_flex().id(`herd-card-${ask.id}`).min_w(0).gap(8).p(10).rounded(8).border(1).border_color(t.border)
+      .when(state.images.some(image => image.provenance === 'unrecorded'), el => el.child(div().text_size(10).text_color(t.muted).child('Image identity at opening was not recorded. Current verified previews shown.')))
       .child(node(state.card.root)).when(Boolean(state.error), el => el.child(div().text_size(11).text_color(t.blocked).child(state.error)));
   }
 

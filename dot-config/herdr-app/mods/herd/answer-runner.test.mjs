@@ -28,7 +28,7 @@ test('delivery confirmation reads only the canonical owner and requires Al, ID a
   const home = path.join(root, 'home'), project = path.join(home, 'Project/sample');
   fs.mkdirSync(project, { recursive: true });
   const request = { project, home, id: 'sample:fixture', answer: '  A\n\nExact note  ' };
-  const ask = { id: request.id, to: 'al', state: 'answered', answered_by: 'al', answer: 'A\n\nExact note' };
+  const ask = { id: request.id, to: 'al', state: 'answered', answered_by: 'al', answer: request.answer };
   const check = items => confirmAnswer(request, { platform: 'linux', run(command, args, settings) {
     assert.equal(command, 'seats');
     assert.deepEqual(args, ['--project', fs.realpathSync(project), 'asks', '--json']);
@@ -37,7 +37,7 @@ test('delivery confirmation reads only the canonical owner and requires Al, ID a
   } });
   assert.equal(check([ask]), 'sent');
   assert.equal(check([{ ...ask, state: 'open' }]), 'open');
-  for (const replacement of [{ answer: 'Different' }, { answered_by: 'sample/guide' }, { state: 'withdrawn' }]) {
+  for (const replacement of [{ answer: request.answer.trim() }, { answer: 'Different' }, { answered_by: 'sample/guide' }, { state: 'withdrawn' }]) {
     assert.equal(check([{ ...ask, ...replacement }]), 'closed');
   }
   for (const items of [[], {}, [ask, ask], [{ ...ask, id: 'other:fixture' }], [{ ...ask, to: 'sample/guide' }], [{ ...ask, state: 'mystery' }]]) {

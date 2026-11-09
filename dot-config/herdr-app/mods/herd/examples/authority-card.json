@@ -1,0 +1,10 @@
+{
+  "schema": "ark-card/1",
+  "root": "authority",
+  "elements": {
+    "authority": { "type": "stack", "props": {}, "children": ["scope", "destination", "decision"] },
+    "scope": { "type": "text", "props": { "text": "Approve this scope once.\n\n- Read the selected repository files for one review.\n- Return the findings to the asking seat.", "tone": "strong" } },
+    "destination": { "type": "table", "props": { "columns": ["Authority", "Destination"], "rows": [["One read-only review", "The asking institution"], ["Duration", "This task only"]] } },
+    "decision": { "type": "options", "props": { "options": [{ "label": "Approve", "detail": "Allow the scope and destination shown above, once." }, { "label": "Deny", "detail": "Do not grant this authority." }], "allowNote": true } }
+  }
+}

@@ -41,6 +41,7 @@ export function parseAsks(stdout) {
       parent: typeof ask.parent === 'string' ? ask.parent : null,
       run: ask.run || null,
       card: ask.card == null ? null : (JSON.stringify(ask.card).length <= 65536 ? ask.card : {schema:'card-too-large'}),
+      card_images: ask.card_images == null ? null : (JSON.stringify(ask.card_images).length <= 128 * 1024 ? ask.card_images : {invalid:true}),
       owner_project: typeof ask.owner_project === 'string' ? ask.owner_project : null });
   }
   return result.sort((a, b) => a.opened_at.localeCompare(b.opened_at) || a.id.localeCompare(b.id));
@@ -75,7 +76,7 @@ export function answerCommand(ask, text, userHome) {
   if (!ask || !/^[a-z][a-z0-9_-]*:[A-Za-z0-9_-]+$/.test(ask.id || '') || ask.to !== 'al' || ask.state !== 'open' ||
       !personalFolder(ask.owner_project, userHome)) throw new Error('The owning personal project is unavailable. Refresh this inbox.');
   if (typeof text !== 'string' || !text.trim() || text.length > 12000 || text.includes('\0')) throw new Error('Enter an answer of up to 12,000 characters.');
-  return { args: ['--project', ask.owner_project, 'answer', '--from', 'al', '--', ask.id, text.trim()], cwd: ask.owner_project };
+  return { args: ['--project', ask.owner_project, 'answer', '--from', 'al', '--', ask.id, text], cwd: ask.owner_project };
 }
 
 export function acceptedAnswer(result, id) {

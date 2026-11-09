@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { acceptCardImage, acceptCardReceipt, cardOptions } from './cards.mjs';
 
 test('only bounded content-addressed card PNG/JPG cache receipts become images',()=>{
-  const image={status:'ready',image:'herd-cache/cards/'+'a'.repeat(64)+'.jpg',sha256:'a'.repeat(64),width:800,height:600,path:'art/front.jpeg',commit:'b'.repeat(40)};
+  const image={status:'ready',image:'herd-cache/cards/'+'a'.repeat(64)+'.jpg',sha256:'a'.repeat(64),width:800,height:600,path:'art/front.jpeg',commit:'b'.repeat(40),bytes:1000,provenance:'same'};
   assert.equal(acceptCardImage(image),image);
   for(const change of [{image:'../outside.jpg'},{sha256:'c'.repeat(64)},{width:8193},{height:0},{path:'../outside.jpg'},{commit:'not a commit'}])assert.equal(acceptCardImage({...image,...change}),null);
 });

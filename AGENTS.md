@@ -56,6 +56,15 @@ Question details render a literal Markdown subset: paragraphs, hard line breaks 
 active links. Ask evidence supports up to 12 explicitly named committed PNGs. A click opens that ask's loaded
 images in an album (arrows/left-right, zoom, Fit, Esc); it waits for the ask's remaining previews before opening.
 Album views read only validated cache metadata and start no readers or timers. Test the actual click/key handlers.
+Ask cards retain their raw `ark-card/1` spec until the shared kit `_asks-card-check` validates it. `card-runner.mjs`
+passes specs on stdin (not the Windows command line), verifies manifest image bytes and stages PNG/JPG previews
+under app-home herd-cache/cards (96 images, 64 MiB). No new package dependency. Temporary request files live outside
+mods/ and are removed in finally, including a separate cleanup after timeout. Revalidate before card answers or
+album opening; a changed manifest refuses the action. Only the owning ask's options can answer, through the same
+guarded receipt/confirmation path. Card refusal keeps the ordinary question/options available. Work makes no calls.
+The authority-box pattern is examples/authority-card.json: explicit scope, destination and one-task approve/deny
+choices. It answers its own ask; the renderer grants no independent execution permission. Native QA answers only
+scratch asks, never real ones. Keep every runtime helper in the installer and check actual click callbacks.
 While Al uses the live window, never flip its layout or close overlays for verification. Install reviewed files
 and let the mod reload; ask through the steward or liaison before requesting a fresh visible copy.
 

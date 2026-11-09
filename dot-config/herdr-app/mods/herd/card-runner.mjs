@@ -74,12 +74,21 @@ export async function checkedCard(request, options = {}) {
   let result;
   try { result = JSON.parse(run(invocation.command, args, { ...gitSettings, input, stdio: ['pipe', 'pipe', 'pipe'], timeout: 90000, maxBuffer: 2 * 1024 * 1024 })); }
   catch (error) { fail(error.stderr?.toString('utf8').trim().slice(0, 400) || 'Card validation is unavailable.'); }
-  if (fs.realpathSync(result.owner_project) !== repo || result.card?.schema !== 'ark-card/1' || !Array.isArray(result.images) || result.images.length > 64) fail('Invalid card validation receipt.');
+  if (fs.realpathSync(result.owner_project) !== repo || result.card?.schema !== 'ark-card/1' || !Array.isArray(result.images) || result.images.length > 70) fail('Invalid card validation receipt.');
   if (request.expectedImages && (!Array.isArray(request.expectedImages) || request.expectedImages.length !== result.images.length ||
       request.expectedImages.some((image, index) => image.path !== result.images[index].path || image.sha256 !== result.images[index].sha256))) fail('Card images changed. Refresh to inspect them before answering.');
+  let baseline = null;
+  if (request.card_images != null) {
+    const seen = new Set(); let bytes = 0;
+    if (!Array.isArray(request.card_images) || request.card_images.length > 70 || request.card_images.some(image => {
+      if (!scriptPath(image?.path) || !/^[0-9a-f]{64}$/.test(image.sha256 || '') || !Number.isInteger(image.bytes) || image.bytes < 1 || image.bytes > MAX_SOURCE_BYTES || seen.has(image.path)) return true;
+      seen.add(image.path); bytes += image.bytes; return false;
+    }) || bytes > 32 * 1024 * 1024 || seen.size !== result.images.length || result.images.some(image => !seen.has(image.path))) fail('Invalid recorded card image baseline.');
+    baseline = new Map(request.card_images.map(image => [image.path, image]));
+  }
   let total = 0;
   const images = result.images.map(item => {
-    if (!scriptPath(item.path) || !/\.(png|jpe?g)$/.test(item.path) || !/^[0-9a-f]{64}$/.test(item.sha256) ||
+    if (!scriptPath(item.path) || !/\.(png|jpe?g)$/i.test(item.path) || !/^[0-9a-f]{64}$/.test(item.sha256) ||
         !Number.isInteger(item.bytes) || item.bytes < 1 || item.bytes > MAX_SOURCE_BYTES || !['image/png', 'image/jpeg'].includes(item.mime) ||
         !Number.isInteger(item.width) || !Number.isInteger(item.height) || item.width < 1 || item.height < 1 || item.width > 8192 || item.height > 8192 || item.width * item.height > 16_000_000) fail('Invalid card image receipt.');
     const file = path.resolve(repo, item.path);
@@ -106,13 +115,17 @@ export async function checkedCard(request, options = {}) {
       trim(cache, keep);
     });
   }
-  return { card: result.card, images: images.map(({ item, name }) => ({ status: 'ready', image: 'herd-cache/cards/' + name,
-    path: item.path, width: item.width, height: item.height, commit: before, sha256: item.sha256 })) };
+  return { card: result.card, images: images.map(({ item, name }) => {
+    const asked = baseline?.get(item.path), changed = asked && (asked.sha256 !== item.sha256 || asked.bytes !== item.bytes);
+    return { status: 'ready', image: 'herd-cache/cards/' + name, path: item.path, width: item.width, height: item.height,
+      commit: before, sha256: item.sha256, bytes: item.bytes, provenance: !asked ? 'unrecorded' : changed ? 'changed' : 'same',
+      ...(changed ? {askedSha256:asked.sha256,askedBytes:asked.bytes} : {}) };
+  }) };
 }
 
 export async function runCardRequest(userHome, appHome, file, options = {}) {
   ownRequest(userHome, appHome, file);
-  try { return await checkedCard({ ...JSON.parse(bounded(file, 128 * 1024).toString('utf8')), home: userHome, appHome }, options); }
+  try { return await checkedCard({ ...JSON.parse(bounded(file, 512 * 1024).toString('utf8')), home: userHome, appHome }, options); }
   finally { cleanCardRequest(userHome, appHome, file); }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

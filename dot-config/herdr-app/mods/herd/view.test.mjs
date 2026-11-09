@@ -688,3 +688,59 @@ test('album fit compensates native size events for app zoom at narrow width',()=
  const content=find(view.render(),'herd-album-viewport').childNodes[0];
  assert.equal(content.values.w,210);assert.equal(content.childNodes[0].values.w,210);assert.equal(content.childNodes[0].values.h,105);
 });
+
+function cardFixture() {
+ const images=[1,2].map(n=>({...albumImage(n),image:'herd-cache/cards/'+String(n).repeat(64)+'.jpg',sha256:String(n).repeat(64),path:'art/'+n+'.jpg',bytes:1000,provenance:'same'}));
+ const card={schema:'ark-card/1',root:'stack',elements:{
+  stack:{type:'stack',props:{},children:['intro','preview','choices','facts','stage']},
+  intro:{type:'text',props:{text:'Scope: fixture only.\n\n- No external action',tone:'strong'}},
+  preview:{type:'image',props:{path:images[0].path,caption:'Fixture preview'}},
+  choices:{type:'options',props:{options:[{label:'Approve',detail:'Fixture scope',image:images[0].path},{label:'Deny',detail:'No change',image:images[1].path}],recommended:'Approve',allowNote:true}},
+  facts:{type:'table',props:{columns:['Scope','Destination'],rows:[['Fixture','Scratch ledger']]}},stage:{type:'progress',props:{value:1,max:2,label:'Ready'}}}};
+ const ask={id:'sample:card',from:'sample/guide',to:'al',state:'open',question:'Fixture authority?',options:['Approve','Deny'],recommendation:'Approve',owner_project:'C:/Users/example/Project/sample',card};
+ return {ask,receipt:{card,images}};
+}
+
+test('all six card types render only after a checked receipt; refusal retains ordinary ask options',()=>{
+ const {ask,receipt}=cardFixture(),{view}=harness();view.askList=[ask];view.prepareAskInputs();
+ view.cards[ask.id]={key:cards.cardSignature(ask),...receipt};const tree=view.render();
+ assert.ok(find(tree,'herd-card-'+ask.id));assert.ok(find(tree,'herd-card-option-'+ask.id+'-0'));
+ assert.equal(find(tree,'herd-answer-option-'+ask.id+'-0'),null,'no duplicate option buttons');
+ view.cards[ask.id]={key:cards.cardSignature(ask),error:'Fixture card refused'};
+ assert.ok(find(view.render(),'herd-answer-option-'+ask.id+'-0'));
+});
+
+test('a card click revalidates once before one guarded answer, preserving allowNote and cleaning request files',async()=>{
+ for(const allowNote of [true,false]){
+  const {ask,receipt}=cardFixture();receipt.card.elements.choices.props.allowNote=allowNote;const commands=[];
+  let h;h=harness(new Map(),async(command,args)=>{
+   commands.push([command,args]);
+   if(args[1]==='check')return {code:0,stdout:JSON.stringify(receipt)};
+   if(args[1]==='clean'){h.files.delete(args.at(-1));return {code:0};}
+   assert.ok(args[0].endsWith('/answer-runner.mjs'));const request=JSON.parse(args[1]);assert.equal(request.answer,allowNote?'Approve\n\nA literal note':'Approve');return {code:0,stdout:ask.id+'\n'};
+  });
+  const {view}=h;view.askList=[ask];view.prepareAskInputs();view.askInputs[ask.id].set_value('A literal note');view.cards[ask.id]={key:cards.cardSignature(ask),...receipt};
+  const tasks=[],cx={notify(){},spawn(body){tasks.push(body(cx));}};const button=find(view.render(),'herd-card-option-'+ask.id+'-0');button.click({},cx);button.click({},cx);
+  assert.equal(view.answerStates[ask.id].validating,true);view.answerAsk(ask,'Deny',cx);
+  for(let i=0;i<tasks.length;i++)await tasks[i];
+  assert.equal(commands.filter(([,args])=>args[1]==='check').length,1);assert.equal(commands.filter(([,args])=>args[0].endsWith('/answer-runner.mjs')).length,1);
+  assert.equal(view.answerStates[ask.id].sent,ask.from);assert.equal(h.files.size,0);assert.ok(commands.every(([,args])=>Array.isArray(args)));
+ }
+});
+
+test('card validation errors never send; Work makes no card requests or writes',async()=>{
+ const {ask,receipt}=cardFixture(),commands=[];let h;
+ h=harness(new Map(),async(command,args)=>{commands.push(args);if(args[1]==='check')throw new Error('Fixture timeout');if(args[1]==='clean'){h.files.delete(args.at(-1));return {code:0};}assert.fail('validation failure cannot answer');});
+ const {view}=h;view.askList=[ask];view.cards[ask.id]={key:cards.cardSignature(ask),...receipt};const tasks=[],cx={notify(){},spawn(body){tasks.push(body(cx));}};
+ view.answerCard(ask,'Approve',cx);for(const task of tasks)await task;assert.match(view.answerStates[ask.id].error,/timeout/);assert.equal(h.files.size,0);
+ view.personalView=false;commands.length=0;view.loadCards(cx);await assert.rejects(view.checkCard(ask));assert.equal(commands.length,0);assert.equal(h.files.size,0);
+});
+
+test('a checked card image opens the full manifest album after revalidation, including JPG',async()=>{
+ const {ask,receipt}=cardFixture();let h;h=harness(new Map(),async(command,args)=>{
+  if(args[1]==='check')return {code:0,stdout:JSON.stringify(receipt)};
+  if(args[1]==='clean'){h.files.delete(args.at(-1));return {code:0};}assert.fail('album cannot answer');
+ });
+ const {view,calls}=h;view.askList=[ask];view.cards[ask.id]={key:cards.cardSignature(ask),...receipt};let task;const cx={notify(){},spawn(body){task=body(cx);}};
+ view.openCardAlbum(ask,'art/2.jpg',cx);await task;assert.equal(calls.length,1);assert.equal(calls[0][0],'overlay');assert.equal(calls[0][1].props.album.length,2);assert.equal(calls[0][1].props.albumAt,1);
+});

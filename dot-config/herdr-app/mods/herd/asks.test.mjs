@@ -31,6 +31,15 @@ test('evidence recognizes only literal named relative PNGs, with no traversal, U
   assert.deepEqual(askImages({question:images.concat(images).join(' ')}), images.slice(0,12));
 });
 
+test('the asks projection retains raw cards for the shared checker without hiding invalid-card asks', () => {
+  const card={schema:'ark-card/1',root:'text',elements:{text:{type:'text',props:{text:'Fixture'}}}};
+  assert.deepEqual(parseAsks(JSON.stringify([{...ask,card}]))[0].card,card);
+  const oversized=parseAsks(JSON.stringify([{...ask,card:{text:'x'.repeat(70000)}}]))[0];
+  assert.equal(oversized.id,ask.id);assert.equal(oversized.card.schema,'card-too-large');
+  const owner_project='C:/Users/example/Project/sample';
+  assert.equal(answerCommand({...ask,owner_project},' Approve ','C:/Users/example').args.at(-1),' Approve ','card labels remain exact');
+});
+
 test('asker faces bind one current personal role holder, with no Work, remote or ambiguous fallback', () => {
   const userHome = 'C:/Users/example', owner_project = userHome + '/Project/sample';
   const question = { ...ask, owner_project };

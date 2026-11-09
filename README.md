@@ -114,6 +114,16 @@ Named committed PNGs appear inline through the same bounded app-home cache, with
 Question details preserve paragraphs, hard line breaks and dash bullets as plain text, with no HTML or active links.
 Click an image for its ask's album (up to 12 named committed PNGs): arrows or left/right keys change images, plus/minus
 zoom, Fit resets, and Esc closes. The album uses existing cached previews and starts no new readers.
+Asks may also carry a native `ark-card/1` card: text, images, option choices, tables, progress and vertical stacks.
+The seats kit revalidates each spec and its committed PNG/JPG images. Card choices answer only their owning ask;
+they are checked again before sending. Images share the album. An unavailable card leaves the ordinary question
+and answer controls usable. Everything stays local and Work remains metadata only.
+
+For an authority question, adapt [the example card](dot-config/herdr-app/mods/herd/examples/authority-card.json):
+name the exact scope, destination and duration, then attach it with `seats ask al QUESTION --options 'Approve|Deny'
+--card FILE`. Approve or Deny records the answer on that ask; it does not run a command. Optional notes use the
+same answer field. The renderer uses Node built-ins and the installed seats kit, with no package install.
+
 Slow refreshes show Checking and retain the last list for up to 120 seconds; a failed refresh marks it stale.
 Confirmed sends disappear across open views; no answers or drafts
 are persisted in mod state. Config watchers plus slow polling refresh the per-institution snapshots; they are not globally atomic.

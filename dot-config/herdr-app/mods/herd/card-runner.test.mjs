@@ -54,3 +54,11 @@ test('card image cache trims only owned regular images, keeping the current card
   fs.writeFileSync(path.join(cache,'keep.txt'),'unrelated');await checkedCard(f.request,f.options);
   assert.equal(fs.readdirSync(cache).filter(name=>/\.(png|jpg)$/.test(name)).length,CARD_CACHE_COUNT);assert.equal(fs.readFileSync(path.join(cache,'keep.txt'),'utf8'),'unrelated');
 });
+
+test('large card text travels on stdin instead of the Windows command line',async t=>{
+  const f=fixture(t),elements={root:{type:'stack',props:{},children:[]}};
+  for(let i=0;i<18;i++){const id='text-'+i;elements.root.children.push(id);elements[id]={type:'text',props:{text:('Literal $() `quoted` ; & | text. ').repeat(90)}};}
+  const card={schema:'ark-card/1',root:'root',elements};let commandLength=0,inputLength=0;
+  await checkedCard({...f.request,card}, {...f.options,run(command,args,settings){commandLength=args.join(' ').length;inputLength=settings.input.length;assert.deepEqual(JSON.parse(settings.input),card);return JSON.stringify({card,owner_project:f.repo,images:[]});}});
+  assert.ok(inputLength>32768);assert.ok(commandLength<1000);
+});
