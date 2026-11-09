@@ -8,7 +8,7 @@ import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCom
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
 import { publishFacts, consumeFacts, forgetFacts } from './facts.mjs';
-import { validateGrid, boundGrid, gridTarget, gridSeats, restoreGridPlan, gridApi } from './grid.mjs';
+import { validateGrid, boundGrid, gridTarget, gridSeats, restoreGridPlan, gridApi, gridGeometry } from './grid.mjs';
 import { questionBlocks } from './ask-text.mjs';
 import { cardSignature, acceptCardImage, acceptCardReceipt, cardOptions } from './cards.mjs';
 
@@ -717,12 +717,18 @@ export default class Herd extends View {
   }
 
   openGridSeat(seat, cx) {
+    if (this.gridBusy) return;
     const pane = panes().find(p => p.pane === seat.pane && p.terminal === seat.address);
     if (!pane) { this.jump(seat); return; }
-    const record = boundGrid(props()?.grid, shared('herd.gridPanes'), panes(), spaces());
-    if (record && pane.tab === record.tab) {
-      this.returnGrid({ ...record, focusPane: pane.pane, zoomPane: record.zoomPane === pane.pane ? pane.pane : null }, cx);
-    } else this.jump(seat);
+    this.gridBusy = true; this.gridError = null; cx.notify();
+    cx.spawn(async cx => {
+      try {
+        if (!pane.zoomed) await gridApi(exec, 'pane.zoom', { pane: pane.pane });
+        await gridApi(exec, 'pane.focus', { pane: pane.pane });
+        // Keep the hidden grid and its original return record for Grid / Terminals.
+      } catch (error) { this.gridError = String(error.message || 'Could not open this seat.').slice(0, 300); }
+      finally { this.gridBusy = false; cx.notify(); }
+    });
   }
 
   gridView(t) {
@@ -738,27 +744,28 @@ export default class Herd extends View {
     const history = consumeFacts(seats, now).history;
     this.history = stateHistory({ ...this.history, ...history }, seats, now);
     this.historyDirty = true;
-    const zoom = Number(settings().zoom) > 0 ? Number(settings().zoom) : 1, width = this.width / zoom;
-    const columns = Math.min(Math.max(1, seats.length), Math.max(1, Math.floor((width - 26) / 334)));
-    const tileWidth = Math.max(100, Math.min(420, (width - 56 - (columns - 1) * 14) / columns));
-    return v_flex().id('herd-grid').size_full().min_w(0).min_h(0).p(20).gap(16).bg(t.canvas)
+    const zoom = Number(settings().zoom) > 0 ? Number(settings().zoom) : 1;
+    const geometry = gridGeometry(seats.length, this.gridArea ? this.gridArea.width / zoom : this.width / zoom - 12,
+      this.gridArea ? this.gridArea.height / zoom : 600);
+    return v_flex().id('herd-grid').size_full().min_w(0).min_h(0).p(6).gap(6).bg(t.canvas)
       .on_size_change((size, cx) => { if (this.width !== size.width) { this.width = size.width; cx.notify(); } })
       .child(h_flex().gap(12).items_center().flex_wrap()
         .child(v_flex().flex_1().min_w(0).gap(4)
-          .child(div().truncate().text_size(21).font_semibold().text_color(t.foreground).child(group?.name || 'Institution'))
+          .child(div().truncate().text_size(16).font_semibold().text_color(t.foreground).child(group?.name || 'Institution'))
           .child(div().text_size(11).text_color(t.dim).child(`${seats.length} seats · ${this.personalView ? 'live state and sourced sentences' : 'metadata only'}`)))
         .child(this.askButton('herd-grid-terminals', 'Terminals', cx => this.returnGrid(actual, cx), t, this.gridBusy)))
       .when(Boolean(this.gridError), el => el.child(div().text_size(11).text_color(t.blocked).child(this.gridError)))
       .child(v_flex().id('herd-grid-scroll').flex_1().min_w(0).min_h(0).overflow_y_scrollbar()
+        .on_size_change((size, cx) => { if (this.gridArea?.width !== size.width || this.gridArea?.height !== size.height) { this.gridArea = size; cx.notify(); } })
         .when(!seats.length, el => el.child(div().p(12).text_size(13).text_color(t.muted).child('No seats remain in this institution.')))
-        .child(h_flex().gap(14).flex_wrap().items_start().justify_center().children(seats.map(seat => {
+        .child(h_flex().gap(geometry.gutter).flex_wrap().items_start().children(seats.map(seat => {
           const quote = this.personalView ? quoteState(seat, this.cache, now, home(), actual.space) : null;
           const sentence = quote?.kind === 'quote' ? quote.text : seat.statusLine;
           const age = duration(now - (this.history[seat.address]?.at ?? now));
-          return v_flex().id(`herd-grid-seat-${seat.address}`).w(tileWidth).min_h(240).p(18).gap(12).rounded(12).bg(t.surface).border(1).border_color(t.border)
+          return v_flex().id(`herd-grid-seat-${seat.address}`).w(geometry.width).h(geometry.height).p(12).gap(8).rounded(6).bg(t.surface).border(1).border_color(t.border)
             .when(['idle', 'unknown'].includes(seat.status), el => el.opacity(0.68))
-            .hover(el => el.bg(t.hover).opacity(1)).cursor_pointer()
-            .tooltip(`${seat.name} · ${seat.role}\nOpen the actual seat; its grid stays available from the sidebar.`)
+            .hover(el => el.bg(t.hover).border_color(t.accent).shadow_md().opacity(1)).cursor_pointer()
+            .tooltip(`${seat.name} · ${seat.role}\nShow only this terminal. Grid in the sidebar brings the tiles back; Terminals restores the original splits.`)
             .on_click((_event, cx) => this.openGridSeat(seat, cx))
             .child(h_flex().gap(10).items_center()
               .when(this.personalView, el => el.child(this.face(seat, t, 42).id(`herd-grid-face-${seat.address}`)))

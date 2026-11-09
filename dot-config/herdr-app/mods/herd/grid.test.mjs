@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateGrid, boundGrid, gridTarget, gridSeats, restoreGridPlan, gridApi } from './grid.mjs';
+import { validateGrid, boundGrid, gridTarget, gridSeats, restoreGridPlan, gridApi, gridGeometry } from './grid.mjs';
+
+test('equal tiles fill the available pane with only small gutters at wide and narrow sizes', () => {
+  for (const count of [1,2,3,4,6,12]) for (const [width,height] of [[1200,800],[500,900]]) {
+    const g = gridGeometry(count,width,height);
+    assert.equal(g.columns*g.rows,count);
+    assert.ok(Math.abs(g.width*g.columns+g.gutter*(g.columns-1)-width)<0.001);
+    if (g.height>160) assert.ok(Math.abs(g.height*g.rows+g.gutter*(g.rows-1)-height)<0.001);
+  }
+  assert.equal(gridGeometry(2,1200,800).columns,2); assert.equal(gridGeometry(2,500,900).columns,1);
+});
 
 const panes = [{ pane: 'p1', terminal: 't1', tab: 'tab', zoomed: false }, { pane: 'p2', terminal: 't2', tab: 'tab', zoomed: false },
   { pane: 'pg', mod: 'herd', tab: 'tab', zoomed: true }];

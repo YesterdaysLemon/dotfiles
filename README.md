@@ -47,7 +47,8 @@ Personal previews, prompt checks and asks are active only in a personal space. N
 
 Each institution has a **Grid** button. It opens its seats as native tiles in that institution's tab: familiar,
 name and role, state and observed time, and a sourced sentence when available. Quiet seats remain visible and state
-changes do not reorder the tiles. Click a tile to bring the actual terminal forward; Grid brings the tiles back.
+changes do not reorder the tiles. Equal tiles fill the pane with small gutters and highlight on hover.
+Click a tile to show only that terminal, zoomed; Grid in the sidebar brings the same tiles back.
 **Terminals** restores the previous focus, zoom and split layout, removing only the extra grid pane. No terminal
 is recreated or stopped. Grid copies reuse the sidebar's in-memory facts and start no readers. Work grids show
 metadata without faces or screen quotes. The ordinary seats-main layout remains the fallback.

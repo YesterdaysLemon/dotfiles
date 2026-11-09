@@ -29,6 +29,9 @@ rendering or closing it. Terminals restores the prior zoom and focus, then close
 last host action; preserve terminal IDs and splits. Grid copies start no readers: bounded module-memory facts
 reuse sidebar quotes and observed state times, expire and never persist quotes. Tile positions stay stable across
 state changes. Work grids remain metadata only. Native QA must prove the before/after split and focus restoration.
+Tiles fill the available grid area with equal cells and small gutters. Hover highlights the border. Clicking a
+tile zooms only that terminal but retains the hidden grid and its original return record; Grid in the sidebar
+returns to it, and Terminals restores the original split/focus/zoom. Never rebuild a baseline from the clicked seat.
 Switching to seats-main starts a bounded Node handoff that removes validated owned grid panes and restores focus;
 otherwise a zoomed pane would survive the layout fallback. It never closes a terminal or edits shipped mods.
 

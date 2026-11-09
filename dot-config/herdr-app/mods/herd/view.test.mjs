@@ -50,7 +50,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
     'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity', 'questionBlocks',
-    'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi',
+    'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi', 'gridGeometry',
     'cardSignature', 'acceptCardImage', 'acceptCardReceipt', 'cardOptions'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
@@ -460,7 +460,7 @@ test('grid tiles fit a narrow pane at app zoom while quiet seats remain visible'
   view.init({}, { timer: { every() {} } });
   view.render().values.on_size_change({ width: 500, height: 700 }, { notify() {} });
   const tile = find(view.render(), 'herd-grid-seat-t1');
-  assert.equal(tile.values.w, 194); assert.equal(tile.values.opacity, 0.68);
+  assert.equal(tile.values.w, 238); assert.equal(tile.values.opacity, 0.68);
 });
 
 test('opening a grid guards rapid clicks and creates only a new owned mod pane', async () => {
@@ -503,7 +503,7 @@ test('return awaits zoom and focus, then closes only the grid as its last host a
   assert.deepEqual(calls, [['pane.close', { pane: 'pg' }]]);
 });
 
-test('a tile defaults to focus in the preserved terminal split and closes only its grid', async () => {
+test('a tile zooms only its terminal, preserving the grid and its original return record', async () => {
   const record = { institution: 'sample', space: 's1', tab: 'tab', pane: 'pg', focusPane: 'p1', zoomPane: null, token: 'fixture' };
   const commands = [];
   const { view, seat, native, sharedState, calls } = harness(new Map(), async (...args) => {
@@ -512,9 +512,9 @@ test('a tile defaults to focus in the preserved terminal split and closes only i
   native.panes.push({ pane: 'pg', mod: 'herd', tab: 'tab', zoomed: true });
   sharedState.set('herd.gridPanes', { tab: record });
   let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
-  view.openGridSeat(seat, cx); await task;
-  assert.deepEqual(commands.map(call => [call[1][1], JSON.parse(call[1][2])]), [['pane.zoom', { pane: 'pg' }], ['pane.focus', { pane: 'p1' }]]);
-  assert.deepEqual(calls, [['pane.close', { pane: 'pg' }]]);
+  view.openGridSeat(seat, cx); view.openGridSeat(seat, cx); await task;
+  assert.deepEqual(commands.map(call => [call[1][1], JSON.parse(call[1][2])]), [['pane.zoom', { pane: 'p1' }], ['pane.focus', { pane: 'p1' }]]);
+  assert.deepEqual(calls, []); assert.equal(sharedState.get('herd.gridPanes').tab, record);
 });
 
 test('the fallback handoff receives only validated owned grids and preserves current terminal focus', async () => {
