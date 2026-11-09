@@ -3,7 +3,7 @@
 #
 #   scripts/herdr-app.sh           install: link (macOS/Linux) or copy (Windows) the files, then show seats-main;
 #                                  herd's files are copied everywhere, so re-run after pulling to update them
-#   scripts/herdr-app.sh capture   Windows: copy the live files back here after changing them in the app
+#   scripts/herdr-app.sh capture   copy the copied files (all on Windows, herd's everywhere) back here after changing them in the app
 #
 # Safe to re-run. The app writes everything else in its home itself (state, generated types, its shipped mods), so
 # only these files live here, and stow skips this folder (.stowrc).
