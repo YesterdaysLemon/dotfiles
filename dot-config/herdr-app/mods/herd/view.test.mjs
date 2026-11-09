@@ -40,7 +40,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   const sharedState = new Map();
   const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {} }) };
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
-    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'answerCommand', 'acceptedAnswer', 'askImages',
+    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');

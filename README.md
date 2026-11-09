@@ -92,7 +92,9 @@ of allowing a partial clone to fetch image objects implicitly.
 
 The asks lane reads `seats asks --to al --all --open --json` from a personal institution, using the kit's configured
 routes. Any teaser opens the complete inbox, grouped by institution, with options, recommendations and what waits
-on each answer. Click an option, optionally adding a note, or send a free answer. Each explicit click runs one args-array
+on each answer. Card headers show the current personal asker's familiar and name from live seat metadata, with an
+initial when the holder is missing or ambiguous. Work and remote seats provide no faces. Click an option, optionally
+adding a note, or send a free answer. Each explicit click runs one args-array
 `seats answer` call as Al in the owning personal project; the kit records and routes it to the asker. The card stays
 disabled while sending. Only exit 0 and the matching ask ID show Sent; errors and timeouts remain visible for review.
 Answering requires Node; on Windows the launcher passes arguments to the installed Bash seats script through Git Bash,

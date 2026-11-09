@@ -1,5 +1,6 @@
 // Current-state projection and guarded explicit answer arguments. No shell text.
 import { personalFolder } from './spaces.mjs';
+import { pathKey, safeAvatar } from './model.mjs';
 export const ASK_TTL = 120000;
 
 export function parseAsks(stdout) {
@@ -35,6 +36,21 @@ export function askGroups(items) {
     groups.get(owner).asks.push(ask);
   }
   return [...groups.values()].sort((a, b) => a.owner.localeCompare(b.owner));
+}
+
+export function askerProfile(ask, groups, userHome, personalView, infos = {}) {
+  if (!personalView || !personalFolder(ask.owner_project, userHome)) return null;
+  const party = /^([a-z][a-z0-9_-]*)\/([a-z][a-z0-9_-]*)$/.exec(ask.from || '');
+  if (!party) return null;
+  const owner = pathKey(ask.owner_project);
+  const underOwner = cwd => pathKey(cwd) === owner || pathKey(cwd).startsWith(owner + '/');
+  const candidates = groups.filter(group => !group.machine && (group.workspace === party[1] ||
+    (party[1] === ask.id.split(':')[0] && (pathKey(infos[group.key]?.info?.project) === owner || group.seats.some(seat => underOwner(seat.cwd))))))
+    .flatMap(group => group.seats).filter(seat => seat.role === party[2] && seat.address && !seat.address.includes('/') &&
+      !seat.machine && personalFolder(seat.cwd, userHome));
+  if (candidates.length !== 1) return null;
+  const seat = candidates[0];
+  return { name: seat.name, role: seat.role, avatar: safeAvatar(seat.avatar), party: ask.from };
 }
 
 export function answerCommand(ask, text, userHome) {

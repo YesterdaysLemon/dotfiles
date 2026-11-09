@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAsks, questionExcerpt, answerCommand, acceptedAnswer, askImages } from './asks.mjs';
+import { parseAsks, questionExcerpt, answerCommand, acceptedAnswer, askImages, askerProfile } from './asks.mjs';
 
 const ask = { id: 'sample:20261108T120000Z-123abc', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose the next build?', opened_at: '2026-11-08T12:00:00Z', options: ['one', 'two'], recommendation: 'one', blocks: 'the next build' };
 test('the asks lane retains only open asks to Al and preserves the brief fields', () => {
@@ -27,6 +27,30 @@ test('answer arguments bind the personal owner and preserve text, including lead
 test('evidence recognizes only literal named relative PNGs, with no traversal, URL or glob', () => {
   assert.deepEqual(askImages({ question: 'Compare (docs/morning/the_look_variants.png), `docs/other.png` and docs/other.png.' }), ['docs/morning/the_look_variants.png', 'docs/other.png']);
   for (const question of ['../outside.png', '/tmp/file.png', 'https://host/file.png', 'C:/Work/file.png', 'docs/*.png', 'docs/[ab].png', '.git/file.png']) assert.deepEqual(askImages({ question }), [], question);
+});
+
+test('asker faces bind one current personal role holder, with no Work, remote or ambiguous fallback', () => {
+  const userHome = 'C:/Users/example', owner_project = userHome + '/Project/sample';
+  const question = { ...ask, owner_project };
+  const seat = { address: 't1', name: 'Current', role: 'guide', avatar: 'avatars/sample/current.png', cwd: owner_project };
+  const group = { key: 'sample', workspace: 'sample', seats: [seat] };
+  const profile = askerProfile(question, [group], userHome, true);
+  assert.deepEqual(profile, { name: 'Current', role: 'guide', avatar: seat.avatar, party: 'sample/guide' });
+  const reject = (questions = question, groups = [group], personal = true) => assert.equal(askerProfile(questions, groups, userHome, personal), null);
+  reject(question, [group], false);
+  reject({ ...question, owner_project: userHome + '/Work/sample' });
+  reject({ ...question, owner_project: null });
+  reject({ ...question, from: 'sample' });
+  reject({ ...question, from: 'al' });
+  reject(question, [{ ...group, seats: [seat, { ...seat, address: 't2' }] }]);
+  for (const replacement of [{ ...seat, role: 'maker' }, { ...seat, cwd: userHome + '/Work/sample' }, { ...seat, address: 'remote/t1' }, { ...seat, machine: 'remote' }]) reject(question, [{ ...group, seats: [replacement] }]);
+  reject(question, [{ ...group, machine: 'remote' }]);
+  assert.equal(askerProfile(question, [{ ...group, seats: [{ ...seat, avatar: '../outside.png' }] }], userHome, true).avatar, null);
+  const alias = { ...group, workspace: 'different-workspace' };
+  assert.equal(askerProfile(question, [alias], userHome, true).name, 'Current', 'canonical owner path can bind a workspace alias');
+  const worktree = { ...alias, seats: [{ ...seat, cwd: userHome + '/Project/sample-feature' }] };
+  reject(question, [worktree]);
+  assert.equal(askerProfile(question, [worktree], userHome, true, { sample: { info: { project: owner_project } } }).name, 'Current');
 });
 test('malformed, duplicate, oversized or unknown-state responses never become an all-clear', () => {
   for (const value of ['not json', '{}', JSON.stringify([ask, ask]), JSON.stringify([{ ...ask, state: 'mystery' }]), JSON.stringify(Array(501).fill(ask))]) assert.throws(() => parseAsks(value));

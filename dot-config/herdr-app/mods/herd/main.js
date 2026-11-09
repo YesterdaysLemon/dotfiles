@@ -4,7 +4,7 @@ import { v_flex, h_flex, InputState, Input } from 'gpui-base';
 import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
-import { ASK_TTL, parseAsks, questionExcerpt, askGroups, answerCommand, acceptedAnswer, askImages } from './asks.mjs';
+import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
 
@@ -228,9 +228,14 @@ export default class Herd extends View {
 
   askRow(ask, t, detail = false) {
     const writable = this.personalView && personalFolder(ask.owner_project, home());
+    const asker = askerProfile(ask, this.askerGroups || [], home(), this.personalView, this.infos);
     return v_flex().id(`herd-ask-${ask.id}`).p(detail ? 12 : 8).gap(5).rounded(7).bg(t.raised)
       .when(!detail, el => el.cursor_pointer().hover(el => el.bg(t.hover)).on_click(() => this.showAsks()))
-      .child(div().text_size(9.5).text_color(t.dim).child(ask.from))
+      .child(h_flex().gap(7).items_center().tooltip(asker ? `Current holder of ${ask.from}` : ask.from)
+        .child(this.face(asker || { name: ask.from }, t, detail ? 32 : 26))
+        .child(v_flex().min_w(0).gap(2)
+          .child(div().truncate().text_size(detail ? 12 : 10.5).text_color(t.muted).child(asker ? `${asker.name} · ${asker.role}` : ask.from))
+          .when(Boolean(asker), el => el.child(div().truncate().text_size(9).text_color(t.dim).child(ask.from)))))
       .child(div().text_size(detail ? 12 : 10.5).text_color(t.foreground).child(detail ? ask.question : questionExcerpt(ask)))
       .when(detail, el => el
         .children(askImages(ask).map(path => {
@@ -294,6 +299,7 @@ export default class Herd extends View {
   snapshot() {
     const allSpaces = spaces();
     const groups = projectHerd({ agents: agents(), terminals: terminals(), panes: panes(), spaces: allSpaces });
+    this.askerGroups = groups;
     this.viewSpace = props()?.space || focused()?.space;
     const view = spaceHerd(groups, allSpaces, this.viewSpace, home());
     this.personalView = view.personal;
