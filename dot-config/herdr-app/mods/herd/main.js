@@ -216,7 +216,7 @@ export default class Herd extends View {
   }
 
   openAskTerminal(ask, cx) {
-    if (this.scriptStates?.[ask.id]?.busy || this.scriptStates?.[ask.id]?.opened) return;
+    if (this.scriptStates?.[ask.id]?.busy || this.scriptStates?.[ask.id]?.cooldown) return;
     this.snapshot();
     if (!this.personalView || !ask.run || !personalFolder(ask.owner_project, home())) return;
     this.scriptStates[ask.id] = { busy: true };
@@ -237,7 +237,9 @@ export default class Herd extends View {
           argv: ['node', helper, 'launch', script.token] })], { timeout: 10000 });
         const created = reply.code === 0 && JSON.parse(reply.stdout);
         if (!created?.tab || !created?.terminal || created.error) throw new Error('The terminal did not open.');
-        this.scriptStates[ask.id] = { opened: true };
+        const state = { opened: true, cooldown: true };
+        this.scriptStates[ask.id] = state;
+        cx.timer.after(1500, cx => { if (this.scriptStates[ask.id] === state) { state.cooldown = false; cx.notify(); } });
         if (props()?.overlay) closeOverlay(props().overlay);
       } catch (error) { this.scriptStates[ask.id] = { error: String(error.message || 'The terminal did not open.').slice(0, 250) }; }
       finally { cx.notify(); }
@@ -299,8 +301,8 @@ export default class Herd extends View {
         }))
         .when(Boolean(ask.blocks), el => el.child(div().text_size(11).text_color(t.muted).child(`Waiting: ${ask.blocks}`)))
         .when(Boolean(ask.run), el => el.child(h_flex().gap(8).items_center()
-          .child(this.askButton(`herd-run-${ask.id}`, this.scriptStates?.[ask.id]?.busy ? 'Checking script…' : this.scriptStates?.[ask.id]?.opened ? 'Opened terminal' : 'Open terminal', cx => this.openAskTerminal(ask, cx), t,
-            Boolean(!writable || this.scriptStates?.[ask.id]?.busy || this.scriptStates?.[ask.id]?.opened)))
+          .child(this.askButton(`herd-run-${ask.id}`, this.scriptStates?.[ask.id]?.busy ? 'Checking script…' : this.scriptStates?.[ask.id]?.cooldown ? 'Opened terminal' : this.scriptStates?.[ask.id]?.opened ? 'Reopen terminal' : 'Open terminal', cx => this.openAskTerminal(ask, cx), t,
+            Boolean(!writable || this.scriptStates?.[ask.id]?.busy || this.scriptStates?.[ask.id]?.cooldown)))
           .child(div().text_size(10).text_color(t.dim).child(ask.run))))
         .when(Boolean(this.scriptStates?.[ask.id]?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(this.scriptStates[ask.id].error)))
         .when(Boolean(ask.recommendation && !ask.options?.length), el => el.child(div().text_size(11).text_color(t.muted).child(`Recommended: ${ask.recommendation}`)))

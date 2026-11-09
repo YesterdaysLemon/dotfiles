@@ -437,7 +437,7 @@ test('Open terminal checks the script before launching one ID-labelled tab in a 
   view.allSpaces = [{ id: 'personal', folder: owner }, { id: 'work', folder: 'C:/Users/example/Work/example' }];
   const ask = { id: 'sample:run', from: 'sample/guide', to: 'al', state: 'open', question: 'Run this?', owner_project: owner, run: 'tools/setup.ps1' };
   view.askList = [ask];
-  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  let task, cooldown; const cx = { notify() {}, spawn(body) { task = body(cx); }, timer: { after(ms, body) { assert.equal(ms, 1500); cooldown = body; } } };
   const button = find(view.render(), 'herd-run-' + ask.id);
   button.click({}, cx); button.click({}, cx);
   assert.equal(commands.length, 1, 'rapid clicks cannot start another validation or tab');
@@ -450,6 +450,12 @@ test('Open terminal checks the script before launching one ID-labelled tab in a 
   assert.equal(tab.argv[0], 'node'); assert.equal(tab.argv[2], 'launch');
   assert.equal(tab.argv[3], 'fixture_encoded_request');
   assert.equal(view.scriptStates[ask.id].opened, true);
+  view.openAskTerminal(ask, cx);
+  assert.equal(commands.length, 2, 'the short cooldown still refuses a duplicate');
+  cooldown(cx);
+  assert.equal(find(view.render(), 'herd-run-' + ask.id).childNodes[0], 'Reopen terminal');
+  view.openAskTerminal(ask, cx); await task;
+  assert.equal(commands.length, 4, 'an intentional reopen validates again and opens another tab');
 });
 
 test('a changed script or a space that becomes Work cannot open a terminal', async () => {
