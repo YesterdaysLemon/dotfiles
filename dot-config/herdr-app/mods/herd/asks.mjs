@@ -85,7 +85,7 @@ export function askImages(ask) {
   // Only literal repo-relative PNG references in this ask, never URLs or globs.
   const paths = String(ask.question || '').match(/[^\s`"'<>()[\]{}]+\.png\b/gi) || [];
   return [...new Set(paths.filter(value => value.length <= 512 && !/[\\:*?\x00-\x1f$]/.test(value) && !value.startsWith('/') &&
-    value.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git') && value.endsWith('.png')))].slice(0, 3);
+    value.split('/').every(part => part && part !== '.' && part !== '..' && part !== '.git') && value.endsWith('.png')))].slice(0, 12);
 }
 
 export function questionExcerpt(ask, limit = 140) {

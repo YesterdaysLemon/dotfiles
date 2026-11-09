@@ -11,6 +11,7 @@ import * as asks from './asks.mjs';
 import * as sentences from './sentences.mjs';
 import * as facts from './facts.mjs';
 import * as grid from './grid.mjs';
+import * as askText from './ask-text.mjs';
 
 // Exercise the shipped view's real callbacks with a tiny GPUI description recorder.
 // Native layout/paint is checked separately by herdr-app and review screenshots.
@@ -37,7 +38,7 @@ function find(node, id) {
   return null;
 }
 
-function harness(storage = new Map(), execute = async () => ({ code: 1 }), userHome = 'C:/Users/example', viewProps = {}) {
+function harness(storage = new Map(), execute = async () => ({ code: 1 }), userHome = 'C:/Users/example', viewProps = {}, appSettings = {}) {
   const calls = [];
   const sharedState = new Map();
   const native = { panes: [{ pane: 'p1', terminal: 't1', tab: 'tab', zoomed: false }],
@@ -46,20 +47,21 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {} }) };
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
     'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
-    'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity',
+    'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity', 'questionBlocks',
     'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
-  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'window', 'hc', 'panes', 'spaces', 'focused', ...names, source)(
+  const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'closeOverlay', 'window', 'settings', 'hc', 'panes', 'spaces', 'focused', ...names, source)(
     class {}, element, element, element, element, element,
     { new: element }, InputState,
     (...args) => calls.push(args), () => new Proxy({}, { get: (_, key) => String(key) }), key => sharedState.get(key), (key, value) => sharedState.set(key, value), () => userHome,
     { setItem: (key, value) => storage.set(key, value), getItem: key => storage.get(key) ?? null },
-    () => viewProps, execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]),
+    () => viewProps, execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]), id => calls.push(['closeOverlay', id]),
     () => ({ platform: 'linux' }),
+    () => appSettings,
     args => execute('hc', args),
     () => native.panes, () => native.spaces, () => native.focus,
-    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid })[name]),
+    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid, ...askText })[name]),
   );
   const view = new Herd();
   const seat = { address: 't1', pane: 'p1', space: 's1', name: 'Sample', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample', institution: 'sample' };
@@ -310,7 +312,7 @@ test('answers write a scratch ledger with exact text once, then require the matc
   assert.equal(commands[0].options.cwd, owner);
   assert.equal(view.answerStates[ask.id].sent, ask.from);
   assert.equal(view.visibleAsks([ask]).length, 0);
-  assert.equal(sharedState.get('herd.askOutcomes')[ask.id], ask.from);
+  assert.equal(sharedState.get('herd.askOutcomes')[ask.id].from, ask.from);
   assert.deepEqual(calls, [], 'the receipt updates shared visibility without a command that dismisses the dialog');
   view.answerAsk(ask, 'Option A', cx);
   assert.equal(commands.length, 1);
@@ -351,7 +353,7 @@ test('a timeout or error after append confirms the exact answer and shows sent w
     assert.deepEqual(commands[1].request, { ...commands[0].request, mode: 'confirm' });
     assert.equal(commands[1].options.cwd, ask.owner_project);
     assert.equal(view.answerStates[ask.id].sent, ask.from);
-    assert.equal(sharedState.get('herd.askOutcomes')[ask.id], ask.from);
+    assert.equal(sharedState.get('herd.askOutcomes')[ask.id].from, ask.from);
     view.answerAsk(ask, 'A', cx);
     assert.equal(commands.length, 2, 'a confirmed answer cannot be sent twice');
   }
@@ -576,4 +578,97 @@ test('a changed script or a space that becomes Work cannot open a terminal', asy
     view.openAskTerminal(ask, cx); await task;
     assert.equal(commands.length, 1); assert.ok(view.scriptStates[ask.id].error);
   }
+});
+
+
+test('Work-to-Project scope change starts the full inbox immediately, without a render-side task or minute wait', async () => {
+  const commands = [];
+  const asks = Array.from({ length: 9 }, (_, i) => ({ id:'sample:scope'+i, from:'sample/guide', to:'al', state:'open', question:'Fixture question?', opened_at:'2026-11-09T06:00:00Z', owner_project:'C:/Users/example/Project/sample' }));
+  const {view,seat}=harness(new Map(),async(...args)=>{commands.push(args);return {code:0,stdout:JSON.stringify(asks)};});
+  let scope='work';
+  view.snapshot=()=>{view.viewSpace=scope;view.personalView=scope!=='work';return [{key:'sample',workspace:'sample',seats:[seat]}];};
+  view.scan=()=>{};view.refreshMetadata=()=>{};
+  const tasks=[];const cx={notify(){},spawn(body){tasks.push(body(cx));}};
+  view.refreshAsks(cx);view.readerSpace='work';assert.equal(commands.length,0);
+  scope='project';view.refreshScope(cx);await Promise.all(tasks);
+  assert.equal(commands.length,1);assert.equal(view.asks.length,9);assert.equal(view.asksBusy,false);
+  view.refreshScope(cx);assert.equal(commands.length,1,'same-space file events do not bypass cache');
+  scope='work';view.refreshScope(cx);assert.equal(commands.length,1,'Work transition makes no reader calls');
+});
+
+test('a changed personal scope during an inbox read discards that result and immediately serves the new scope', async () => {
+  let scope='first',finish;const commands=[];
+  const {view,seat}=harness(new Map(),async(...args)=>{commands.push(args);if(commands.length===1)return new Promise(done=>{finish=done;});return {code:0,stdout:'[]'};});
+  view.snapshot=()=>{view.viewSpace=scope;view.personalView=true;return [{key:'sample',workspace:'sample',seats:[seat]}];};
+  const tasks=[];const cx={notify(){},spawn(body){tasks.push(body(cx));}};
+  view.refreshAsks(cx);scope='second';view.snapshot();view.asksChecked=0;
+  finish({code:0,stdout:'[]'});await tasks[0];await Promise.all(tasks);
+  assert.equal(commands.length,2);assert.equal(view.asksBusy,false);assert.ok(view.asksChecked);
+});
+
+test('a personal space without a usable institution reports unavailable instead of endless initial Loading',()=>{
+  const {view}=harness();view.snapshot=()=>[];view.personalView=true;
+  view.refreshAsks({notify(){},spawn(){assert.fail('no guessed owner or reader');}});
+  assert.equal(view.asksError,true);
+});
+
+
+test('fresh open ledger entries clear persisted sent receipts instead of silently hiding open asks',async()=>{
+ const ask={id:'sample:reopened',from:'sample/guide',to:'al',state:'open',question:'Fixture?',opened_at:'2026-11-09T06:00:00Z'};
+ const {view,sharedState}=harness(new Map(),async()=>({code:0,stdout:JSON.stringify([ask])}));
+ sharedState.set('herd.askOutcomes',{[ask.id]:'sample/guide'});view.answerStates[ask.id]={sent:ask.from};
+ let task;const cx={notify(){},spawn(body){task=body(cx);}};view.refreshAsks(cx);await task;
+ assert.equal(view.visibleAsks().length,1);assert.equal(sharedState.get('herd.askOutcomes')[ask.id],undefined);assert.equal(view.answerStates[ask.id],undefined);
+});
+
+test('a stale in-flight read cannot resurrect a newly sent answer',async()=>{
+ const ask={id:'sample:race',from:'sample/guide',to:'al',state:'open',question:'Fixture?',opened_at:'2026-11-09T06:00:00Z'};
+ let view;const h=harness(new Map(),async()=>{await new Promise(done=>setTimeout(done,3));view.answerSent(ask);return {code:0,stdout:JSON.stringify([ask])};});view=h.view;
+ let task;const cx={notify(){},spawn(body){task=body(cx);}};view.refreshAsks(cx);await task;
+ assert.equal(view.visibleAsks().length,0);assert.equal(h.sharedState.get('herd.askOutcomes')[ask.id].from,ask.from);
+});
+
+
+const albumImage = (n) => ({status:'ready',image:'herd-cache/'+String(n).repeat(64)+'.png',width:800,height:400,commit:'a'.repeat(40),path:'docs/'+n+'.png'});
+
+test('an ask image opens only that ask\'s validated cached images at the clicked slide; Work cannot open it',()=>{
+ const {view,calls}=harness();const ask={id:'sample:album',from:'sample/guide',to:'al',state:'open',question:'Paragraph\n\n- Choice one\n- Choice two\n\ndocs/1.png docs/2.png',owner_project:'C:/Users/example/Project/sample'};
+ view.askList=[ask];view.evidence={};for(const n of [1,2])view.evidence[ask.id+'|'+ask.owner_project+'|docs/'+n+'.png']=albumImage(n);
+ const image=find(view.render(),'herd-evidence-'+ask.id+'-docs/2.png');image.childNodes[0].click({},{});
+ assert.equal(calls[0][0],'overlay');assert.equal(calls[0][1].props.album.length,2);assert.equal(calls[0][1].props.albumAt,1);
+ view.personalView=false;view.showAskAlbum(ask,'docs/1.png');assert.equal(calls.length,1);
+});
+
+test('album has no readers; arrows, zoom, fit and Escape use the actual view callbacks',()=>{
+ const {view,calls}=harness(new Map(),async()=>assert.fail('album has no reader'),'C:/Users/example',{album:[albumImage(1),albumImage(2)],albumAt:0,overlay:'fixture-album'});
+ let focus=0;view.init({}, {focus_handle(){return {focus(){focus++;}};},spawn(){assert.fail('album cannot spawn');},timer:{every(){assert.fail('album cannot poll');}}});
+ assert.equal(focus,1);const cx={notify(){},stop_propagation(){}};
+ find(view.render(),'herd-album-next').click({},cx);assert.equal(view.albumAt,1);
+ find(view.render(),'herd-album-in').click({},cx);assert.equal(view.albumZoom,1.5);
+ view.render().values.on_key_down({key:'left'},cx);assert.equal(view.albumAt,0);assert.equal(view.albumZoom,1);
+ view.render().values.on_key_down({key:'+'},cx);assert.equal(view.albumZoom,1.5);
+ find(view.render(),'herd-album-fit').click({},cx);assert.equal(view.albumZoom,1);
+ view.render().values.on_key_down({key:'escape'},cx);assert.deepEqual(calls,[['closeOverlay','fixture-album']]);
+});
+
+test('opening an album waits for the remaining previews and cancels across a Work transition',async()=>{
+ for (const switchToWork of [false,true]) {
+  let finish;const {view,calls}=harness(new Map(),()=>new Promise(resolve=>{finish=resolve;}));
+  const ask={id:'sample:pending',from:'sample/guide',question:'docs/1.png docs/2.png',owner_project:'C:/Users/example/Project/sample'};
+  view.askList=[ask];view.evidence[ask.id+'|'+ask.owner_project+'|docs/1.png']=albumImage(1);
+  let task;const cx={notify(){},spawn(body){task=body(cx);}};
+  view.showAskAlbum(ask,'docs/1.png',cx);assert.deepEqual(calls,[]);assert.ok(view.pendingAlbum);
+  if(switchToWork){view.personalView=false;view.viewSpace='work';view.refreshAsks=()=>{};view.refreshMetadata=()=>{};view.scan=()=>{};view.refreshScope(cx);}
+  finish({code:0,stdout:JSON.stringify(albumImage(2))});await task;
+  assert.equal(view.pendingAlbum,null);assert.equal(calls.length,switchToWork?0:1);
+  if(!switchToWork)assert.equal(calls[0][1].props.album.length,2);
+ }
+});
+
+test('album fit compensates native size events for app zoom at narrow width',()=>{
+ const {view}=harness(new Map(),undefined,undefined,{album:[albumImage(1)]},{zoom:2});
+ view.init({}, {focus_handle(){return {focus(){}};}});
+ view.render().values.on_size_change({width:500,height:700},{notify(){}});
+ const content=find(view.render(),'herd-album-viewport').childNodes[0];
+ assert.equal(content.values.w,210);assert.equal(content.childNodes[0].values.w,210);assert.equal(content.childNodes[0].values.h,105);
 });
