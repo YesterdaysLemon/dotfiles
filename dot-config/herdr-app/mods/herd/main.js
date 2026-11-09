@@ -1,8 +1,9 @@
 // Cloned from seat-agents. Institution-first projection, without a model.
 import { View, div, image, svg } from 'gpui-kit';
 import { v_flex, h_flex } from 'gpui-base';
-import { agents, terminals, panes, spaces, run, theme, shared, home, hc, props, nextCommand } from 'herdr';
+import { agents, terminals, panes, spaces, focused, run, theme, shared, home, hc, props, nextCommand } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
+import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
 const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states') || '{}'); } catch { return {}; } };
@@ -16,9 +17,10 @@ export default class Herd extends View {
     this.scanning = false;
     this.lastCheck = 0;
     this.scan(cx);
+
     cx.spawn(async cx => {
       for (;;) {
-        if (await nextCommand() === 'refresh') this.scan(cx);
+        if (await nextCommand() === 'refresh') { this.scan(cx); }
       }
     });
     // Persist observed state outside render. These are data/clock timers, not animation.
@@ -27,14 +29,13 @@ export default class Herd extends View {
   }
 
   snapshot() {
-    const groups = projectHerd({ agents: agents(), terminals: terminals(), panes: panes(), spaces: spaces() });
-    const scope = props() ?? {};
-    const scoped = groups.map(group => {
-      const seats = group.seats.filter(s => (!scope.space || s.space === scope.space) &&
-        (!scope.personalOnly || canReadScreen({ ...s, status: 'idle' }, home())));
-      return { ...group, seats };
-    }).filter(group => group.seats.length);
-    return withPromptStates(scoped, this.cache, Date.now(), home(), this.roots());
+    const allSpaces = spaces();
+    const groups = projectHerd({ agents: agents(), terminals: terminals(), panes: panes(), spaces: allSpaces });
+    this.viewSpace = props()?.space || focused()?.space;
+    const view = spaceHerd(groups, allSpaces, this.viewSpace, home());
+    this.personalView = view.personal;
+    this.spaceName = view.spaceName;
+    return orderSpaceGroups(view.personal ? withPromptStates(view.groups, this.cache, Date.now(), home(), this.roots()) : view.groups);
   }
 
   saveHistory() {
@@ -56,17 +57,18 @@ export default class Herd extends View {
     cx.spawn(async cx => {
       try {
         const seats = this.snapshot().flatMap(g => g.seats);
+        if (!this.personalView) return;
         const candidates = promptCandidates(seats, this.cache, Date.now(), home(), this.roots()).slice(0, 4);
         for (const candidate of candidates) {
           // Recheck live scope/status just before each read: a pane may have moved.
           const seat = this.snapshot().flatMap(g => g.seats).find(s => s.address === candidate.address);
-          if (!seat || !canReadScreen(seat, home(), this.roots())) continue;
+          if (!this.personalView || !seat || !canReadScreen(seat, home(), this.roots())) continue;
           let prompt = null;
           let error = false;
           try {
             const result = await hc(['read', seat.address, '--json', '--lines', '0']);
             const fresh = this.snapshot().flatMap(g => g.seats).find(s => s.address === seat.address);
-            if (!fresh || !canReadScreen(fresh, home(), this.roots()) || pathKey(fresh.cwd) !== pathKey(seat.cwd)) {
+            if (!this.personalView || !fresh || !canReadScreen(fresh, home(), this.roots()) || pathKey(fresh.cwd) !== pathKey(seat.cwd)) {
               delete this.cache[seat.address];
               continue;
             }
@@ -122,7 +124,8 @@ export default class Herd extends View {
           .child(this.stateMark(seat, t))
           .child(div().text_size(10.5).text_color(t.muted).child(`${STATE[seat.status]} · ${age}`))
           .when(seat.promptWait, el => el.child(div().text_size(9).text_color(t.dim).child('screen')))
-          .when(seat.fixture, el => el.child(div().text_size(9).text_color(t.dim).child('fixture'))))))
+          .when(seat.fixture, el => el.child(div().text_size(9).text_color(t.dim).child('fixture'))))
+        .when(Boolean(seat.statusLine && seat.statusLine !== seat.role && seat.statusLine !== seat.name), el => el.child(div().truncate().text_size(10).text_color(t.dim).tooltip('Self-reported terminal metadata').child(seat.statusLine)))))
       .when(!compact, el => el.child(div().text_size(11).text_color(t.dim).child('›')));
   }
 
@@ -158,9 +161,18 @@ export default class Herd extends View {
       .child(div().text_size(9.5).text_color(t.dim).child(`${prompt.title} · open to review${prompt.fixture ? ' · fixture' : ''}`));
   }
 
-  render() {
+  render(cx) {
     const t = theme();
     const groups = this.snapshot();
+    if (cx && this.viewSpace !== this.scheduledSpace) {
+      this.scheduledSpace = this.viewSpace;
+      const space = this.viewSpace;
+      // One deferred data refresh per space transition, never a live-data poll.
+      cx.timer.after(25, cx => {
+        if (this.viewSpace !== space) return;
+        this.scan(cx);
+      });
+    }
     const seats = groups.flatMap(group => group.seats);
     const now = Date.now();
     const next = stateHistory(this.history, seats, now);
@@ -168,7 +180,9 @@ export default class Herd extends View {
       this.history = next;
       this.historyDirty = true;
     }
-    const prompts = currentPrompts(seats, this.cache, now, home(), this.roots());
+    const prompts = this.personalView ? currentPrompts(seats, this.cache, now, home(), this.roots()) : [];
+    const localGroups = groups.filter(group => !group.outsidePin);
+    const outsidePins = groups.filter(group => group.outsidePin).flatMap(group => group.seats);
     const compact = this.width < 180;
     const eligible = seats.filter(s => canReadScreen(s, home(), this.roots()));
     const recent = eligible.map(s => this.cache[s.address]).filter(entry => entry && now - entry.checked < CACHE_MS);
@@ -180,9 +194,13 @@ export default class Herd extends View {
       .on_size_change((size, cx) => { if (this.width !== size.width) { this.width = size.width; cx.notify(); } })
       .child(h_flex().px(compact ? 7 : 16).pt(14).pb(10).items_center().gap(8)
         .child(div().flex_1().text_size(compact ? 11 : 15).font_semibold().text_color(t.foreground).child('Herd'))
-        .when(!compact, el => el.child(div().text_size(10).text_color(t.dim).child(`${groups.length} ${groups.length === 1 ? 'institution' : 'institutions'}`))))
+        .when(!compact, el => el.child(div().max_w(180).truncate().text_size(10).text_color(t.dim).child(this.spaceName || `${localGroups.length} institutions`))))
+      .when(!compact && outsidePins.length > 0, el => el.child(h_flex().px(12).pb(7).gap(5).flex_wrap().items_center()
+        .child(div().text_size(9).text_color(t.dim).child('Pinned'))
+        .children(outsidePins.map(seat => div().id(`herd-pin-${seat.address}`).px(5).py(3).rounded(4).bg(t.surface).text_size(10).text_color(t.muted)
+          .cursor_pointer().tooltip(`${seat.name} · ${seat.role}`).on_click(() => this.jump(seat)).child(`${seat.name} · ${seat.role}`)))))
       .child(v_flex().id('herd-scroll').flex_1().min_h(0).px(compact ? 4 : 10).gap(9).overflow_y_scrollbar().mode('always')
-        .when(!compact, el => el.child(v_flex().gap(6).mb(3)
+        .when(!compact && this.personalView, el => el.child(v_flex().gap(6).mb(3)
           .child(h_flex().px(3).items_center().justify_between()
             .child(div().text_size(10.5).font_semibold().text_color(t.muted).child('NEEDS YOU'))
             .child(div().id('herd-refresh').p(3).text_size(10).text_color(t.dim).cursor_pointer().hover(el => el.text_color(t.foreground))
@@ -198,7 +216,7 @@ export default class Herd extends View {
             .child(div().text_size(10.5).text_color(t.muted).child('Asks to you'))
             .child(div().text_size(10.5).text_color(t.dim).child('The asks ledger is not connected yet.')))))
         .when(!groups.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child('No seats are running here yet.')))
-        .children(groups.map(group => this.card(group, t, now, compact)))
+        .children((compact ? groups : localGroups).map(group => this.card(group, t, now, compact)))
         .child(div().h(8)))
       .when(!compact, el => el.child(div().px(14).py(9).text_size(9.5).text_color(t.dim).child('Quiet seats stay in view.')));
   }

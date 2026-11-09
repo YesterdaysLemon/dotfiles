@@ -13,7 +13,7 @@ src="$repo/dot-config/herdr-app"
 home="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 layout="seats-main"
 files=(settings.json keys.json layouts/seats-main.json mods/seat-agents/main.js mods/seat-agents/mod.json
-  layouts/herd.json layouts/herd.svg mods/herd/main.js mods/herd/mod.json mods/herd/model.mjs)
+  layouts/herd.json layouts/herd.svg mods/herd/main.js mods/herd/mod.json mods/herd/model.mjs mods/herd/spaces.mjs)
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) windows=1 ;; *) windows=0 ;; esac
 app() { MSYS2_ARG_CONV_EXCL='*' herdr-app "$@"; }
 
