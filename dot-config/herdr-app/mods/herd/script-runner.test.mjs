@@ -31,8 +31,11 @@ test('the check and terminal launcher bind HEAD and exact bytes, use argv, and i
   assert.throws(() => inspectScript(f.request, { platform: 'linux', run() { throw new Error('Kit gate refused.'); } }), /Kit gate refused/);
   assert.throws(() => inspectScript(f.request, { platform: 'linux', run() { return '{"run":"other.ps1","owner_project":"/elsewhere","script":"/elsewhere/other.ps1"}'; } }), /different owning script/);
   fs.writeFileSync(f.file, "Write-Output 'Changed after click'\n", 'utf8');
-  f.git('update-index', '--assume-unchanged', 'tools/setup.ps1');
-  assert.throws(() => launchScript(request, { ...f.options, spawn() { assert.fail('changed script cannot run'); } }));
+  for (const flag of ['--assume-unchanged', '--skip-worktree']) {
+    f.git('update-index', flag, 'tools/setup.ps1');
+    assert.throws(() => launchScript(request, { ...f.options, spawn() { assert.fail('changed script cannot run'); } }), flag);
+    f.git('update-index', flag.replace('--', '--no-'), 'tools/setup.ps1');
+  }
 });
 
 test('script checks reject traversal, Work, missing/untracked files, staged edits, linked parents and Git links', t => {
