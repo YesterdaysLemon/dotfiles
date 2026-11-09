@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as model from './model.mjs';
 import * as artifacts from './artifacts.mjs';
 import * as asks from './asks.mjs';
+import * as sentences from './sentences.mjs';
 
 // Exercise the shipped view's real callbacks with a tiny GPUI description recorder.
 // Native layout/paint is checked separately by herdr-app and review screenshots.
@@ -33,7 +34,8 @@ function find(node, id) {
 function harness(storage = new Map(), execute = async () => ({ code: 1 })) {
   const calls = [];
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
-    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt'];
+    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt',
+    'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
   const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'run', 'theme', 'shared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'window', 'hc', ...names, source)(
@@ -43,7 +45,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 })) {
     () => ({}), execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]),
     () => ({ platform: 'linux' }),
     args => execute('hc', args),
-    ...names.map(name => ({ ...model, ...artifacts, ...asks })[name]),
+    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences })[name]),
   );
   const view = new Herd();
   const seat = { address: 't1', pane: 'p1', name: 'Sample', role: 'maker', status: 'idle', cwd: 'C:/Users/example/Project/sample', institution: 'sample' };
@@ -159,6 +161,8 @@ test('a non-personal space suppresses all readers even with a personal pinned li
   const { view, seat } = harness(new Map(), async (...args) => { commands.push(args); return { code: 1 }; });
   seat.pinned = true;
   seat.role = 'liaison';
+  Object.assign(seat, { app: 'codex', space: 's1', status: 'working' });
+  view.viewSpace = 's1';
   view.personalView = false;
   view.cache = {};
   view.infos = {};
@@ -203,4 +207,61 @@ test('switching to a non-personal space during a preview stops the remaining met
   view.refreshMetadata(cx);
   await task;
   assert.deepEqual(commands, ['seats', 'node']);
+});
+
+test('prompts and working Codex quotes share four attempts per read window, including refresh requests', async () => {
+  const commands = [];
+  const quote = 'I am checking the preview.';
+  const { view, storage } = harness(new Map(), async (...args) => {
+    commands.push(args);
+    if (commands.length === 1) return { code: 1, stdout: 'fixture failure that must not be retained' };
+    return { code: 0, stdout: JSON.stringify({ text: `• ${quote}\n\n• Ran a command\n  └ fixture tool body that must not be retained` }) };
+  });
+  const seats = Array.from({ length: 6 }, (_, i) => ({ address: 't' + (i + 1), pane: 'p' + (i + 1), space: 's1', name: 'Fixture', role: 'maker',
+    app: i === 0 ? 'claude' : 'codex', status: i < 2 ? 'idle' : 'working', cwd: 'C:/Users/example/Project/sample' }));
+  view.viewSpace = 's1'; view.cache = {}; view.readTimes = [];
+  view.snapshot = () => [{ key: 'sample', name: 'Sample', workspace: 'sample', status: 'working', seats }];
+  let task;
+  const cx = { notify() {}, spawn: body => { task = body(cx); } };
+  view.scan(cx); await task;
+  assert.equal(commands.length, 4);
+  assert.equal(new Set(commands.map(command => command[1][1])).size, 4, 'a quiet Codex pane is read once for both routes');
+  view.scan(cx); await task;
+  assert.equal(commands.length, 4, 'refresh cannot bypass the time window');
+  view.readTimes = view.readTimes.map(time => time - sentences.SCREEN_READ_WINDOW - 1);
+  view.scan(cx); await task;
+  assert.equal(commands.length, 6, 'the next budget serves unchecked panes while cached checks are reused');
+  assert.ok(commands.every(command => command[0] === 'hc' && command[1][0] === 'read'));
+  assert.ok(!JSON.stringify(view.cache).includes('fixture tool body'), 'raw terminal text is not cached');
+  assert.ok(!JSON.stringify(view.cache).includes('fixture failure'), 'failed screen text is not cached either');
+  const row = find(view.render(), 'herd-quote-t3');
+  assert.equal(row.childNodes[0], quote);
+  view.saveHistory();
+  assert.ok(![...storage.values()].some(value => value.includes(quote)), 'quotes never enter persisted state');
+});
+
+test('an expired quote is removed from the row and its tooltip without scheduling a read during render', () => {
+  const { view, seat, calls } = harness();
+  Object.assign(seat, { app: 'codex', status: 'working', space: 's1' }); view.viewSpace = 's1';
+  view.cache = { t1: { checked: Date.now() - model.CACHE_MS - 1, cwd: model.pathKey(seat.cwd), app: sentences.screenIdentity(seat),
+    pane: seat.pane, space: seat.space, quote: { text: 'I am checking the expired fixture.' }, error: false } };
+  const tree = view.render({ spawn() { assert.fail('render cannot start a read'); }, timer: { after() { assert.fail('render cannot start a timer'); } } });
+  assert.equal(find(tree, 'herd-quote-t1').childNodes[0], 'Screen quote expired');
+  assert.ok(!find(tree, 'herd-seat-t1').values.tooltip.includes('expired fixture'));
+  assert.deepEqual(calls, []);
+});
+
+test('a screen moved to Work while its read was in flight never becomes a quote', async () => {
+  const { view, seat } = harness(new Map(), async () => {
+    seat.cwd = 'C:/Users/example/Work/sample';
+    return { code: 0, stdout: JSON.stringify({ text: '• I am checking the preview.' }) };
+  });
+  Object.assign(seat, { app: 'codex', space: 's1', status: 'working' });
+  view.viewSpace = 's1'; view.cache = {};
+  view.snapshot = () => [{ key: 'sample', name: 'Sample', seats: [{ ...seat }] }];
+  let task;
+  const cx = { notify() {}, spawn: body => { task = body(cx); } };
+  view.scan(cx); await task;
+  assert.deepEqual(view.cache, {});
+  assert.equal(find(view.render(), 'herd-quote-t1'), null);
 });

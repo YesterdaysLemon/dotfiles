@@ -1,11 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CACHE_MS, pathKey, canReadScreen, safeAvatar, projectHerd, withPromptStates, stateHistory, detectPrompt, screenText, promptCandidates, currentPrompts } from './model.mjs';
+import { CACHE_MS, pathKey, canReadScreen, safeAvatar, projectHerd, withPromptStates, stateHistory, detectPrompt, screenText, promptCandidates, currentPrompts, screenIdentity } from './model.mjs';
 
 const userHome = 'C:/Users/example';
 const quiet = { address: 't1', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample' };
 const trust = 'Do you trust the files in this folder?\n\n❯ 1. Yes, I trust this folder\n  2. No, exit\nEnter to confirm';
 const approval = 'Would you like to run the following command?\n\n  echo sample\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)';
+
+test('a shared cache never carries an old program menu into a replacement program or pane', () => {
+  const seat = { ...quiet, app: 'codex', pane: 'p1', space: 's1' };
+  const cache = { t1: { checked: 100, cwd: pathKey(seat.cwd), app: screenIdentity(seat), pane: 'p1', space: 's1', prompt: detectPrompt(approval, 'codex') } };
+  assert.equal(currentPrompts([seat], cache, 101, userHome).length, 1);
+  const replacement = { ...seat, app: 'claude' };
+  assert.equal(currentPrompts([replacement], cache, 101, userHome).length, 0);
+  assert.equal(promptCandidates([replacement], cache, 101, userHome).length, 1);
+  assert.equal(currentPrompts([{ ...seat, pane: 'p2' }], cache, 101, userHome).length, 0);
+});
 
 test('screen scope handles Windows, Git Bash and WSL paths and excludes Work even with overrides', () => {
   assert.equal(canReadScreen(quiet, userHome), true);

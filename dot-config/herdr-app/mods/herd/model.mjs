@@ -19,8 +19,12 @@ export function pathKey(value) {
 
 const inside = (path, root) => path === root || path.startsWith(root + '/');
 
+export function screenIdentity(seat) {
+  return [seat.app || '', seat.program?.key || ''].map(value => String(value).toLowerCase()).join('|');
+}
+
 export function canReadScreen(seat, userHome, extraRoots = []) {
-  if (!seat.address || seat.address.includes('/')) return false;
+  if (!seat.address || seat.address.includes('/') || seat.machine) return false;
   if (!seat.role || !['idle', 'blocked', 'done', 'unknown'].includes(seat.status)) return false;
   const cwd = pathKey(seat.cwd);
   const base = pathKey(userHome);
@@ -140,14 +144,16 @@ export function screenText(stdout) {
 
 export function promptCandidates(seats, cache, now, userHome, extraRoots = []) {
   return seats.filter(s => canReadScreen(s, userHome, extraRoots))
-    .filter(s => !cache[s.address] || cache[s.address].cwd !== pathKey(s.cwd) || now - cache[s.address].checked >= CACHE_MS)
+    .filter(s => !cache[s.address] || cache[s.address].cwd !== pathKey(s.cwd) ||
+      (cache[s.address].app && cache[s.address].app !== screenIdentity(s)) || now - cache[s.address].checked >= CACHE_MS)
     .sort((a, b) => (cache[a.address]?.checked ?? 0) - (cache[b.address]?.checked ?? 0));
 }
 
 export function currentPrompts(seats, cache, now, userHome, extraRoots = []) {
   return seats.flatMap(seat => {
     const entry = cache[seat.address];
-    return canReadScreen(seat, userHome, extraRoots) && entry?.prompt && entry.cwd === pathKey(seat.cwd) && now - entry.checked < CACHE_MS
+    return canReadScreen(seat, userHome, extraRoots) && entry?.prompt && entry.cwd === pathKey(seat.cwd) &&
+      (!entry.app || (entry.app === screenIdentity(seat) && entry.pane === seat.pane && entry.space === seat.space)) && now - entry.checked < CACHE_MS
       ? [{ ...seat, ...entry.prompt, checked: entry.checked }] : [];
   });
 }

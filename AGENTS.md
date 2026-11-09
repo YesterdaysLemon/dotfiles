@@ -7,14 +7,19 @@ Use the user-level frontend-quality skill for visual work. GPUI is native JavaSc
 `seat-agents` and `layouts/seats-main.json` are the existing fallback. The new `herd` mod and `layouts/herd.json`
 provide institution cards, nested seat tiles and a needs-you strip. Prompt rules and pure metadata projections live
 in `herd/model.mjs`; the asks lane reads the kit's aggregate current-state interface. No model is used. Never bake personal names, paths or secrets
-into this public repository. Screen checks exclude Work, remote terminals and working seats; reads are cached and
-retain only a recognized quote. They never send keystrokes or approve a prompt.
+into this public repository. Prompt checks read quiet personal seats. Codex sentence checks also allow working local
+Project panes in the selected space; outside pinned panes never qualify for quotes. Both routes exclude Work and
+remote terminals and share at most
+four attempts per 45 seconds, including refresh and failures, and a 90-second cache. Retain only recognized quotes
+in memory; never persist quotes or raw screens. They never send keystrokes or approve a prompt.
 
 Work in a separate worktree. Cross-lab review is required before implementation reaches the default branch.
 Use explicit owned paths when staging/committing. Preserve unrelated configurations and the live fallback.
 Run the tests and native check below, then inspect `herdr-app status` and a real `herdr-app shot`.
-The native check cannot validate deferred UI states. The herd follows the focused space (or explicit `props.space`
-for a scoped pane). Identify synthetic fixtures plainly and restore the prior layout after review. Space membership
+The native check cannot validate deferred UI states. Use a separate Temp `HERDR_APP_HOME` for native QA, never Al's
+live window. Create tasks/timers only from init, events or tasks, never render. Keep mutable caches and locks outside
+the watched mods tree. The herd follows the focused space (or explicit `props.space` for a scoped pane). Identify
+synthetic fixtures plainly and stop only owned fixtures after review. Space membership
 and pinned access come from live labels, never private institution names. Non-personal views use metadata only,
 without faces or any reader; local liaison cards lead. Test both space scopes with a neutral body, not Work screens.
 
@@ -25,6 +30,11 @@ uncommitted-image fallback, Work/remote reads or default layout activation. Run 
 
 `asks.mjs` validates the read-only `seats asks --to al --all --json` response. No answer, withdrawal or notification
 command belongs in this mod. Preserve the last successful list with a stale indicator on refresh failure.
+
+`sentences.mjs` recognizes bounded literal Codex assistant prose. It skips queued input, menus, tool bodies,
+credential-like assignments and ambiguous frames. A missing/expired quote stays visibly unavailable; never invent
+a summary or derive it from a stale terminal title. Test scope/program/pane changes, read-budget sharing, no quote
+persistence, and a real isolated native view. No model, network or additional runtime dependency is used.
 
 <!-- al-stack:project:start -->
 ## Al-stack project

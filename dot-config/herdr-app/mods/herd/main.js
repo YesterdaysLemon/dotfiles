@@ -6,6 +6,7 @@ import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, prompt
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
 import { ASK_TTL, parseAsks, questionExcerpt } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
+import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
 const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states') || '{}'); } catch { return {}; } };
@@ -19,6 +20,7 @@ export default class Herd extends View {
     this.history = stored();
     this.historyDirty = false;
     this.cache = {};
+    this.readTimes = [];
     this.width = 340;
     this.scanning = false;
     this.lastCheck = 0;
@@ -206,24 +208,36 @@ export default class Herd extends View {
       try {
         const seats = this.snapshot().flatMap(g => g.seats);
         if (!this.personalView) return;
-        const candidates = promptCandidates(seats, this.cache, Date.now(), home(), this.roots()).slice(0, 4);
+        this.readTimes = recentReadTimes(this.readTimes, Date.now());
+        const candidates = screenCandidates(seats, this.cache, Date.now(), home(), this.roots(), this.viewSpace)
+          .slice(0, SCREEN_READ_LIMIT - this.readTimes.length);
         for (const candidate of candidates) {
           // Recheck live scope/status just before each read: a pane may have moved.
           const seat = this.snapshot().flatMap(g => g.seats).find(s => s.address === candidate.address);
-          if (!this.personalView || !seat || !canReadScreen(seat, home(), this.roots())) continue;
+          if (!this.personalView || !seat || !(canReadScreen(seat, home(), this.roots()) || canReadCodexQuote(seat, home(), this.viewSpace))) continue;
+          this.readTimes = recentReadTimes(this.readTimes, Date.now());
+          if (this.readTimes.length >= SCREEN_READ_LIMIT) break;
+          this.readTimes.push(Date.now()); // Failed attempts count too; refresh cannot bypass the shared budget.
           let prompt = null;
+          let quote = null;
           let error = false;
           try {
             const result = await hc(['read', seat.address, '--json', '--lines', '0']);
             const fresh = this.snapshot().flatMap(g => g.seats).find(s => s.address === seat.address);
-            if (!this.personalView || !fresh || !canReadScreen(fresh, home(), this.roots()) || pathKey(fresh.cwd) !== pathKey(seat.cwd)) {
+            if (!this.personalView || !fresh || !(canReadScreen(fresh, home(), this.roots()) || canReadCodexQuote(fresh, home(), this.viewSpace)) ||
+                pathKey(fresh.cwd) !== pathKey(seat.cwd) || fresh.pane !== seat.pane || fresh.space !== seat.space || screenIdentity(fresh) !== screenIdentity(seat)) {
               delete this.cache[seat.address];
               continue;
             }
             error = result.code !== 0;
-            if (!error) prompt = detectPrompt(screenText(result.stdout), seat.app);
+            if (!error) {
+              const text = screenText(result.stdout);
+              if (canReadScreen(fresh, home(), this.roots())) prompt = detectPrompt(text, fresh.app);
+              if (canReadCodexQuote(fresh, home(), this.viewSpace)) quote = detectCodexQuote(text);
+            }
           } catch { error = true; }
-          this.cache[seat.address] = { checked: Date.now(), cwd: pathKey(seat.cwd), prompt, error };
+          this.cache[seat.address] = { checked: Date.now(), cwd: pathKey(seat.cwd), app: screenIdentity(seat),
+            pane: seat.pane, space: seat.space, prompt, quote, error };
         }
         // Cache only the recognized quote; never retain raw terminal screens.
         const live = new Set(seats.map(s => s.address));
@@ -255,15 +269,27 @@ export default class Herd extends View {
       .when(seat.status !== 'idle' && seat.status !== 'unknown', el => el.bg(t[seat.status] || t.dim));
   }
 
+  sentenceRow(sentence, label, tip, address, t, now) {
+    return v_flex().gap(2).min_w(0)
+      .child(div().id(`herd-quote-${address}`).truncate().text_size(10.5).text_color(sentence.kind === 'quote' ? t.muted : t.dim)
+        .tooltip(`${label}\n${tip}`).child(label))
+      .when(sentence.kind === 'quote', el => el.child(div().text_size(9).text_color(t.dim).child(`screen · ${duration(now - sentence.checked)}`)));
+  }
+
   seatRow(seat, t, now, compact) {
     const age = duration(now - (this.history[seat.address]?.at ?? now));
     const quiet = ['idle', 'unknown'].includes(seat.status) && !seat.focused;
     const label = seat.role ? `${seat.name} · ${seat.role}` : seat.name;
+    const sentence = this.personalView ? quoteState(seat, this.cache, now, home(), this.viewSpace) : null;
+    const quoteLabel = sentence?.kind === 'quote' ? sentence.text : {
+      pending: 'Screen quote pending', expired: 'Screen quote expired', unavailable: 'Screen unavailable', unrecognized: 'No current screen quote',
+    }[sentence?.kind];
+    const quoteTip = sentence ? `${sentence.kind === 'quote' ? 'Literal visible screen quote' : quoteLabel}${sentence.checked ? ` · checked ${duration(now - sentence.checked)} ago` : ''}. Rules can miss progress text.` : '';
     return h_flex().id(`herd-seat-${seat.address}`).px(compact ? 3 : 7).py(6).gap(9).rounded(7).items_center().cursor_pointer()
       .when(seat.focused, el => el.bg(t.selected))
       .when(quiet, el => el.opacity(0.68))
       .hover(el => el.bg(t.hover).opacity(1))
-      .tooltip(`${label}\n${STATE[seat.status]} · ${age} since observed state change${seat.promptWait ? `\nRecognized screen prompt (reported state: ${STATE[seat.reportedStatus] || 'unknown'}).` : ''}${seat.fixture ? '\nPreview fixture' : ''}`)
+      .tooltip(`${label}\n${STATE[seat.status]} · ${age} since observed state change${seat.promptWait ? `\nRecognized screen prompt (reported state: ${STATE[seat.reportedStatus] || 'unknown'}).` : ''}${seat.fixture ? '\nPreview fixture' : ''}${sentence ? `\n${quoteLabel}\n${quoteTip}` : ''}`)
       .on_click(() => this.jump(seat))
       .child(this.face(seat, t, compact ? 24 : 32))
       .when(!compact, el => el.child(v_flex().flex_1().min_w(0).gap(3)
@@ -273,7 +299,8 @@ export default class Herd extends View {
           .child(div().text_size(10.5).text_color(t.muted).child(`${STATE[seat.status]} · ${age}`))
           .when(seat.promptWait, el => el.child(div().text_size(9).text_color(t.dim).child('screen')))
           .when(seat.fixture, el => el.child(div().text_size(9).text_color(t.dim).child('fixture'))))
-        .when(Boolean(seat.statusLine && seat.statusLine !== seat.role && seat.statusLine !== seat.name), el => el.child(div().truncate().text_size(10).text_color(t.dim).tooltip('Self-reported terminal metadata').child(seat.statusLine)))))
+        .when(Boolean(seat.statusLine && seat.statusLine !== seat.role && seat.statusLine !== seat.name), el => el.child(div().truncate().text_size(10).text_color(t.dim).tooltip('Self-reported terminal metadata').child(seat.statusLine)))
+        .when(Boolean(sentence), el => el.child(this.sentenceRow(sentence, quoteLabel, quoteTip, seat.address, t, now)))))
       .when(!compact, el => el.child(div().text_size(11).text_color(t.dim).child('›')));
   }
 
@@ -351,7 +378,7 @@ export default class Herd extends View {
           .child(h_flex().px(3).items_center().justify_between()
             .child(div().text_size(10.5).font_semibold().text_color(t.muted).child('NEEDS YOU'))
             .child(div().id('herd-refresh').p(3).text_size(10).text_color(t.dim).cursor_pointer().hover(el => el.text_color(t.foreground))
-              .tooltip('Check up to four quiet personal seats; cached screens are reused for 90 seconds.')
+              .tooltip('Share up to four screen reads per 45 seconds between quiet prompts and Project Codex quotes; reuse cached checks for 90 seconds.')
               .on_click((_event, cx) => this.scan(cx)).child(this.scanning ? 'Checking…' : '↻')))
           .child(v_flex().gap(5).p(7).rounded(9).border(1).border_color(prompts.length ? t.input : t.border)
             .child(h_flex().justify_between()

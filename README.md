@@ -55,11 +55,19 @@ herdr-app do layout.switch --name seats-main
 ```
 
 Prompt checks are local, only for quiet/waiting personal seats under `~/Project`; `~/Work`, remote terminals and
-working seats are excluded. At most four current screens are checked every 45 seconds, cached for 90 seconds.
+working seats are excluded from prompt checks. Prompt checks and Codex quotes share at most four screen-read
+attempts per 45 seconds, cached for 90 seconds; failed attempts and refresh clicks use that same budget.
 Only a recognized quote is retained in memory. Unrecognized prompts can be missed; the strip is not an all-clear.
 `herd.screenRoots` in local mod shared state can add personal roots, while Work stays excluded. Model summaries
 remain a later phase. Run the pure scope/grouping/prompt tests with
 `node --test dot-config/herdr-app/mods/herd/*.test.mjs`.
+
+Codex tiles can show one literal sentence from visible assistant prose, with a screen label and the age of its
+check. This rule-based route also reads working Codex panes, only in the selected personal space under `~/Project`.
+It recognizes a conservative top-level prose format and leaves tool-only screens, queued input, menus and ambiguous
+frames unquoted. Quotes are capped at 160 characters and kept only in memory; a changed program, folder, pane or
+space invalidates them, and they expire after 90 seconds. State continues to come from Herdr and recognized prompts.
+No model is used. The rules can miss progress text, so an unavailable quote is not an all-clear.
 
 Institutions can opt into an artifact thumbnail by committing a repo-relative image glob in their tracked
 `seats.conf`, for example `SEATS_ARTIFACT='renders/approved/*.png'`. The personal seats kit's `seats info --json`
