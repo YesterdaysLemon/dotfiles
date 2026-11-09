@@ -1,18 +1,27 @@
 // Cloned from seat-agents. Institution-first projection, without a model.
 import { View, div, image, svg } from 'gpui-kit';
 import { v_flex, h_flex, InputState, Input } from 'gpui-base';
-import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window } from 'herdr';
+import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window, settings } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
 import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages, scriptSpace } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
+import { questionBlocks } from './ask-text.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
 const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states') || '{}'); } catch { return {}; } };
 
 export default class Herd extends View {
   init(_props, cx) {
+    this.albumRequested = props()?.album != null;
+    if (this.albumRequested) {
+      this.album = Array.isArray(props().album) ? props().album.slice(0, 12).map(acceptArtifact).filter(Boolean) : [];
+      this.albumAt = Math.max(0, Math.min(this.album.length - 1, Number.isInteger(props().albumAt) ? props().albumAt : 0));
+      this.albumZoom = 1; this.albumWidth = 1000; this.albumHeight = 720;
+      this.albumFocus = cx.focus_handle(); this.albumFocus.focus();
+      return; // Album copies use validated cached images only, never start readers.
+    }
     this.askList = Array.isArray(props()?.askList) ? parseAsks(JSON.stringify(props().askList)) : null;
     this.preview = acceptArtifact(props()?.artifactPreview);
     if (this.preview) return;
@@ -108,6 +117,7 @@ export default class Herd extends View {
     this.snapshot();
     if (this.readerSpace === this.viewSpace) return;
     this.readerSpace = this.viewSpace;
+    if (!this.personalView) this.pendingAlbum = null;
     this.asksChecked = 0;
     this.refreshAsks(cx);
     this.refreshMetadata(cx);
@@ -193,6 +203,78 @@ export default class Herd extends View {
 
   showArtifact(artifact) {
     openOverlay({ mod: 'herd', kind: 'dialog', width: 820, height: 650, props: { artifactPreview: artifact } });
+  }
+
+  showAskAlbum(ask, selected, cx) {
+    this.snapshot();
+    if (!this.personalView || !personalFolder(ask.owner_project, home())) return;
+    const paths = askImages(ask);
+    if (paths.some(path => !this.evidence?.[`${ask.id}|${ask.owner_project}|${path}`])) {
+      this.pendingAlbum = { ask, selected };
+      if (cx) { this.loadEvidence(cx); cx.notify(); }
+      return;
+    }
+    const images = paths.map(path => {
+      const image = acceptArtifact(this.evidence?.[`${ask.id}|${ask.owner_project}|${path}`]);
+      return image?.path === path ? image : null;
+    }).filter(Boolean);
+    if (!images.length) return;
+    openOverlay({ mod: 'herd', kind: 'dialog', width: 0.94, height: 0.92,
+      props: { album: images, albumAt: Math.max(0, images.findIndex(image => image.path === selected)) } });
+  }
+
+  albumMove(delta, cx) {
+    if (!this.album?.length) return;
+    this.albumAt = (this.albumAt + delta + this.album.length) % this.album.length;
+    this.albumZoom = 1; cx.notify();
+  }
+
+  albumScale(delta, cx) { this.albumZoom = Math.max(1, Math.min(4, this.albumZoom + delta)); cx.notify(); }
+
+  albumKey(event, cx) {
+    if (event.key === 'escape') closeOverlay(props().overlay);
+    else if (event.key === 'right') this.albumMove(1, cx);
+    else if (event.key === 'left') this.albumMove(-1, cx);
+    else if (event.key === '+' || event.key === '=') this.albumScale(0.5, cx);
+    else if (event.key === '-') this.albumScale(-0.5, cx);
+    else if (event.key === '0') { this.albumZoom = 1; cx.notify(); }
+    else return;
+    cx.stop_propagation();
+  }
+
+  albumView(t) {
+    const current = this.album?.[this.albumAt];
+    if (!current) return div().p(20).child('These images are unavailable.');
+    // Native size events include the app zoom; explicit image dimensions scale again.
+    const zoom = Number(settings().zoom) > 0 ? Number(settings().zoom) : 1;
+    const width = Math.max(100, this.albumWidth / zoom - 40), height = Math.max(100, this.albumHeight / zoom - 120);
+    const fit = fitArtifact(current, width, height);
+    return v_flex().id('herd-album').size_full().min_w(0).min_h(0).p(16).gap(10).bg(t.canvas)
+      .track_focus(this.albumFocus).on_key_down((event, cx) => this.albumKey(event, cx))
+      .on_size_change((size, cx) => { if (size.width !== this.albumWidth || size.height !== this.albumHeight) {
+        this.albumWidth = size.width; this.albumHeight = size.height; cx.notify();
+      } })
+      .child(h_flex().items_center().gap(8).flex_wrap()
+        .child(this.askButton('herd-album-prev', '←', cx => this.albumMove(-1, cx), t, this.album.length < 2))
+        .child(div().text_size(12).text_color(t.foreground).child(`${this.albumAt + 1} / ${this.album.length}`))
+        .child(this.askButton('herd-album-next', '→', cx => this.albumMove(1, cx), t, this.album.length < 2))
+        .child(div().flex_1())
+        .child(this.askButton('herd-album-out', '−', cx => this.albumScale(-0.5, cx), t, this.albumZoom <= 1))
+        .child(div().text_size(11).text_color(t.muted).child(this.albumZoom === 1 ? 'Fit' : `${this.albumZoom}×`))
+        .child(this.askButton('herd-album-in', '+', cx => this.albumScale(0.5, cx), t, this.albumZoom >= 4))
+        .child(this.askButton('herd-album-fit', 'Fit', cx => { this.albumZoom = 1; cx.notify(); }, t))
+        .child(this.askButton('herd-album-close', 'Close · Esc', () => closeOverlay(props().overlay), t)))
+      .child(div().id('herd-album-viewport').flex_1().min_w(0).min_h(0).overflow_x_scrollbar().overflow_y_scrollbar()
+        .child(h_flex().w(Math.max(fit.width * this.albumZoom, width)).h(Math.max(fit.height * this.albumZoom, height))
+          .items_center().justify_center().child(image(current.image).w(fit.width * this.albumZoom).h(fit.height * this.albumZoom))))
+      .child(div().text_size(11).text_color(t.muted).truncate().child(current.path));
+  }
+
+  questionView(text, t) {
+    return v_flex().gap(9).children(questionBlocks(text).map(block => block.kind === 'bullet'
+      ? h_flex().gap(7).items_start().child(div().text_color(t.muted).child('•'))
+        .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).child(block.lines[0]))
+      : v_flex().gap(2).children(block.lines.map(line => div().text_size(12).text_color(t.foreground).child(line)))));
   }
 
   visibleAsks(items = this.asks) {
@@ -310,6 +392,10 @@ export default class Herd extends View {
             this.snapshot();
             if (!this.personalView) return;
             this.evidence[key] = preview || { status: 'unavailable' };
+            if (this.pendingAlbum?.ask.id === ask.id && askImages(ask).every(path => this.evidence[`${ask.id}|${ask.owner_project}|${path}`])) {
+              const pending = this.pendingAlbum; this.pendingAlbum = null;
+              this.showAskAlbum(pending.ask, pending.selected, cx);
+            }
             cx.notify();
           }
         }
@@ -334,14 +420,15 @@ export default class Herd extends View {
         .child(v_flex().min_w(0).gap(2)
           .child(div().truncate().text_size(detail ? 12 : 10.5).text_color(t.muted).child(asker ? `${asker.name} · ${asker.role}` : ask.from))
           .when(Boolean(asker), el => el.child(div().truncate().text_size(9).text_color(t.dim).child(ask.from)))))
-      .child(div().text_size(detail ? 12 : 10.5).text_color(t.foreground).child(detail ? ask.question : questionExcerpt(ask)))
+      .child(detail ? this.questionView(ask.question, t) : div().text_size(10.5).text_color(t.foreground).child(questionExcerpt(ask)))
       .when(detail, el => el
         .children(askImages(ask).map(path => {
           const evidence = this.evidence?.[`${ask.id}|${ask.owner_project}|${path}`];
-          return v_flex().gap(3)
-            .when(evidence?.status === 'ready', el => el.child(this.artifactView(evidence, t, Math.max(180, this.width - 64), 260, 'Committed image')))
+          return v_flex().id(`herd-evidence-${ask.id}-${path}`).gap(3)
+            .when(evidence?.status === 'ready', el => el.child(this.artifactView(evidence, t, Math.max(180, this.width - 64), 260, 'Image', cx => this.showAskAlbum(ask, path, cx))))
             .when(evidence?.status !== 'ready', el => el.child(div().text_size(10).text_color(t.dim).child(`${path} · ${evidence ? 'preview unavailable' : 'loading preview…'}`)));
         }))
+        .when(this.pendingAlbum?.ask.id === ask.id, el => el.child(div().text_size(11).text_color(t.muted).child('Loading images…')))
         .when(Boolean(ask.blocks), el => el.child(div().text_size(11).text_color(t.muted).child(`Waiting: ${ask.blocks}`)))
         .when(Boolean(ask.run), el => el.child(h_flex().gap(8).items_center()
           .child(this.askButton(`herd-run-${ask.id}`, this.scriptStates?.[ask.id]?.busy ? 'Checking script…' : this.scriptStates?.[ask.id]?.cooldown ? 'Opened terminal' : this.scriptStates?.[ask.id]?.opened ? 'Reopen terminal' : 'Open terminal', cx => this.openAskTerminal(ask, cx), t,
@@ -381,9 +468,10 @@ export default class Herd extends View {
           .children(group.asks.map(ask => this.askRow(ask, t, true))))));
   }
 
-  artifactView(artifact, t, width, maxHeight, label = 'Latest artifact') {
+  artifactView(artifact, t, width, maxHeight, label = 'Latest artifact', onClick = null) {
     const fit = fitArtifact(artifact, width, maxHeight);
     return v_flex().gap(4)
+      .when(Boolean(onClick), el => el.cursor_pointer().tooltip('Open image album').on_click((_event, cx) => onClick(cx)))
       .child(h_flex().w_full().justify_center().rounded(7).bg(t.canvas).overflow_hidden()
         .child(image(artifact.image).w(fit.width).h(fit.height)))
       .child(div().text_size(9.5).text_color(t.dim).truncate().child(`${label} · ${artifact.commit.slice(0, 7)}`));
@@ -567,6 +655,7 @@ export default class Herd extends View {
 
   render() {
     const t = theme();
+    if (this.albumRequested) return this.albumView(t);
     if (this.askList) return this.askListView(t);
     if (this.preview) return this.previewView(t);
     const groups = this.snapshot();

@@ -101,6 +101,9 @@ the exact ID, Al as answerer and the submitted text; an unavailable check offers
 Answering requires Node; on Windows the launcher passes arguments to the installed Bash seats script through Git Bash,
 so multiline notes and shell metacharacters remain literal. Missing owner metadata leaves the ask read-only.
 Named committed PNGs appear inline through the same bounded app-home cache, with no writes under mods. Work stays out.
+Question details preserve paragraphs, hard line breaks and dash bullets as plain text, with no HTML or active links.
+Click an image for its ask's album (up to 12 named committed PNGs): arrows or left/right keys change images, plus/minus
+zoom, Fit resets, and Esc closes. The album uses existing cached previews and starts no new readers.
 Slow refreshes show Checking and retain the last list for up to 120 seconds; a failed refresh marks it stale.
 Confirmed sends disappear across open views; no answers or drafts
 are persisted in mod state. Config watchers plus slow polling refresh the per-institution snapshots; they are not globally atomic.

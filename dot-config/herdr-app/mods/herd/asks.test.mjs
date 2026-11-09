@@ -27,6 +27,8 @@ test('answer arguments bind the personal owner and preserve text, including lead
 test('evidence recognizes only literal named relative PNGs, with no traversal, URL or glob', () => {
   assert.deepEqual(askImages({ question: 'Compare (docs/morning/the_look_variants.png), `docs/other.png` and docs/other.png.' }), ['docs/morning/the_look_variants.png', 'docs/other.png']);
   for (const question of ['../outside.png', '/tmp/file.png', 'https://host/file.png', 'C:/Work/file.png', 'docs/*.png', 'docs/[ab].png', '.git/file.png']) assert.deepEqual(askImages({ question }), [], question);
+  const images = Array.from({length:15}, (_, i) => `docs/choice-${i}.png`);
+  assert.deepEqual(askImages({question:images.concat(images).join(' ')}), images.slice(0,12));
 });
 
 test('asker faces bind one current personal role holder, with no Work, remote or ambiguous fallback', () => {

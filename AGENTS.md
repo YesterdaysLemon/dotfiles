@@ -40,6 +40,13 @@ Inbox reads allow 120 seconds and show Checking while retaining the last list; s
 seconds inside a 100-second exec. Preserve the last list with a stale indicator on refresh failure. Ask evidence uses only explicitly named committed
 PNG paths within the owning project, through the existing bounded reader and app-home cache; no writes under mods/.
 
+Question details render a literal Markdown subset: paragraphs, hard line breaks and dash bullets, with no HTML or
+active links. Ask evidence supports up to 12 explicitly named committed PNGs. A click opens that ask's loaded
+images in an album (arrows/left-right, zoom, Fit, Esc); it waits for the ask's remaining previews before opening.
+Album views read only validated cache metadata and start no readers or timers. Test the actual click/key handlers.
+While Al uses the live window, never flip its layout or close overlays for verification. Install reviewed files
+and let the mod reload; ask through the steward or liaison before requesting a fresh visible copy.
+
 The rough ask terminal card preserves the optional kit `run` path. An explicit Open terminal click validates the
 owning personal repository through the kit's read-only `_asks-run-check` gate, HEAD regular-file mode and unchanged working bytes, then opens an ask-ID-labelled tab
 in the owning institution's personal space or the current personal space. Never Work or remote. The initial card
