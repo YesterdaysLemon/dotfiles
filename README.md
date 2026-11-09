@@ -35,7 +35,7 @@ it from Git Bash.
 
 The optional **herd** layout puts institutions first: a card for each institution, with familiar faces, names and
 roles, current state and time in that state. Quiet seats stay visible. The needs-you strip shows recognized folder
-trust and command approval menus above an asks placeholder. Clicking a seat or prompt opens its terminal; review
+trust and command approval menus alongside open asks. Clicking a seat or prompt opens its terminal; review
 and confirm there yourself. The mod never approves anything or sends keystrokes.
 While a recognized prompt is current, its seat and institution count as **Needs you**, even if the program has
 reported no status. A small screen label and tooltip distinguish that observation from the program's own report.
@@ -43,7 +43,7 @@ reported no status. A small screen label and tooltip distinguish that observatio
 The herd follows the selected space, using live space IDs and seat labels. Its liaison card comes first; pinned
 seats from another space stay reachable above the cards. Work uses labels, state, observed time and any self-reported
 terminal metadata only. It shows no familiar faces and runs no metadata, Git, artifact, screen or model readers.
-Personal previews and prompt checks are active only in a personal space. No institution names are built in.
+Personal previews, prompt checks and asks are active only in a personal space. No institution names are built in.
 
 The installer includes it while keeping `seats-main` as the default. To try it after installation:
 
@@ -81,6 +81,13 @@ Cache misses and hits change no mod asset or directory, so they cannot trigger a
 Test it with `node --test dot-config/herdr-app/mods/herd/artifact-reader.test.mjs`.
 Git must support `--no-lazy-fetch` (verified here with Git 2.51); unsupported versions leave the slot empty instead
 of allowing a partial clone to fetch image objects implicitly.
+
+The asks lane reads `seats asks --to al --all --json` from a personal institution, using the kit's configured routes.
+It shows open questions and opens their full options, recommendations and blockers in a read-only list. It never
+answers, withdraws, delegates or sends notifications. A failed refresh keeps the last successful list marked stale;
+it does not become an all-clear. The strip stays compact, with a View all control for the full list. Each config's
+ledger changes trigger a refresh, with a slow polling fallback. The underlying snapshots are per institution,
+not a globally atomic view.
 
 ## raycast extensions
 

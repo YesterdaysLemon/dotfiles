@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as model from './model.mjs';
 import * as artifacts from './artifacts.mjs';
+import * as asks from './asks.mjs';
 
 // Exercise the shipped view's real callbacks with a tiny GPUI description recorder.
 // Native layout/paint is checked separately by herdr-app and review screenshots.
@@ -42,7 +43,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 })) {
     () => ({}), execute, () => 'C:/Users/example/.config/herdr-app', value => calls.push(['overlay', value]),
     () => ({ platform: 'linux' }),
     args => execute('hc', args),
-    ...names.map(name => ({ ...model, ...artifacts })[name]),
+    ...names.map(name => ({ ...model, ...artifacts, ...asks })[name]),
   );
   const view = new Herd();
   const seat = { address: 't1', pane: 'p1', name: 'Sample', role: 'maker', status: 'idle', cwd: 'C:/Users/example/Project/sample', institution: 'sample' };
@@ -125,6 +126,34 @@ test('metadata refresh makes no calls for a Work institution', async () => {
   assert.deepEqual(view.artifacts, {});
 });
 
+test('asks refresh invokes only the aggregate reader, and ask clicks open details without answering', async () => {
+  const commands = [];
+  const ask = { id: 'sample:20261108T120000Z-abc', from: 'sample/guide', to: 'al', state: 'open', question: 'Which build?', opened_at: '2026-11-08T12:00:00Z' };
+  const { view, seat, calls } = harness(new Map(), async (...args) => { commands.push(args); return { code: 0, stdout: JSON.stringify([ask]) }; });
+  view.snapshot = () => [{ key: 'sample', workspace: 'sample', seats: [seat] }];
+  let task;
+  view.refreshAsks({ spawn: body => { task = body({ notify() {} }); } });
+  await task;
+  assert.deepEqual(commands[0].slice(0, 2), ['seats', ['--project', seat.cwd, 'asks', '--to', 'al', '--all', '--json']]);
+  assert.equal(view.asks.length, 1);
+  find(view.render(), 'herd-ask-' + ask.id).click();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'overlay');
+  assert.equal(calls[0][1].props.askList[0].id, ask.id);
+  assert.equal(commands.length, 1);
+});
+
+test('a failed asks refresh retains the last list and marks it stale', async () => {
+  const { view, seat } = harness();
+  view.snapshot = () => [{ key: 'sample', workspace: 'sample', seats: [seat] }];
+  view.asks = [{ id: 'sample:old', question: 'Known open ask' }];
+  let task;
+  view.refreshAsks({ spawn: body => { task = body({ notify() {} }); } });
+  await task;
+  assert.equal(view.asks[0].id, 'sample:old');
+  assert.equal(view.asksError, true);
+});
+
 test('a non-personal space suppresses all readers even with a personal pinned liaison', async () => {
   const commands = [];
   const { view, seat } = harness(new Map(), async (...args) => { commands.push(args); return { code: 1 }; });
@@ -138,9 +167,10 @@ test('a non-personal space suppresses all readers even with a personal pinned li
   const cx = { notify() {}, spawn: body => { const task = body(cx); tasks.push(task); return task; } };
   view.scan(cx);
   view.refreshMetadata(cx);
+  view.refreshAsks(cx);
   await Promise.all(tasks);
   assert.deepEqual(commands, []);
-  assert.equal(find(view.render(), 'herd-refresh'), null);
+  assert.equal(find(view.render(), 'herd-all-asks'), null);
 });
 
 test('render schedules no tasks or timers when the selected space changes', () => {

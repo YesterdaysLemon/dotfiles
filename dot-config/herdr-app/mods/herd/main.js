@@ -4,6 +4,7 @@ import { v_flex, h_flex } from 'gpui-base';
 import { agents, terminals, panes, spaces, focused, run, theme, shared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
+import { ASK_TTL, parseAsks, questionExcerpt } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
@@ -11,6 +12,8 @@ const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states
 
 export default class Herd extends View {
   init(_props, cx) {
+    this.askList = Array.isArray(props()?.askList) ? parseAsks(JSON.stringify(props().askList)) : null;
+    if (this.askList) return;
     this.preview = acceptArtifact(props()?.artifactPreview);
     if (this.preview) return;
     this.history = stored();
@@ -23,18 +26,45 @@ export default class Herd extends View {
     this.infos = {};
     this.watchedConfigs = new Set();
     this.metadataBusy = false;
+    this.asks = [];
+    this.asksChecked = 0;
+    this.asksError = false;
+    this.asksBusy = false;
     this.scan(cx);
     this.refreshMetadata(cx);
-
+    this.refreshAsks(cx);
     cx.spawn(async cx => {
       for (;;) {
-        if (await nextCommand() === 'refresh') { this.scan(cx); this.refreshMetadata(cx); }
+        if (await nextCommand() === 'refresh') { this.scan(cx); this.refreshMetadata(cx); this.refreshAsks(cx); }
       }
     });
     // Persist observed state outside render. These are data/clock timers, not animation.
     cx.timer.every(30000, cx => { this.saveHistory(); cx.notify(); });
     cx.timer.every(45000, cx => this.scan(cx));
     cx.timer.every(60000, cx => this.refreshMetadata(cx));
+    cx.timer.every(60000, cx => this.refreshAsks(cx));
+  }
+
+  refreshAsks(cx) {
+    if (this.asksBusy || (this.asksChecked && Date.now() - this.asksChecked < ASK_TTL)) return;
+    const groups = this.snapshot();
+    if (!this.personalView) return;
+    const project = groups.map(group => {
+      const source = artifactSource(group, home());
+      return source ? this.infos?.[group.key]?.info?.project || source : null;
+    }).find(Boolean);
+    if (!project) { this.asksError = Boolean(this.asks?.length || this.asksChecked); return; } // No personal institution: no aggregate reads.
+    this.asksBusy = true;
+    cx.spawn(async cx => {
+      try {
+        const result = await exec(seatsExecutable(window()?.platform), ['--project', project, 'asks', '--to', 'al', '--all', '--json'], { timeout: 30000 });
+        if (result.code !== 0) throw new Error('asks unavailable');
+        this.asks = parseAsks(result.stdout);
+        this.asksChecked = Date.now();
+        this.asksError = false;
+      } catch { this.asksError = true; } // Retain the last successful list, visibly marked stale.
+      finally { this.asksBusy = false; cx.notify(); }
+    });
   }
 
   watchConfig(folder, cx) {
@@ -46,10 +76,11 @@ export default class Herd extends View {
           const changed = await watchFolder(folder);
           if (!configChanges(changed, folder)) continue;
           for (const entry of Object.values(this.infos)) if (entry.info?.config_dir === folder) entry.checked = 0;
+          this.asksChecked = 0;
           // The one-second pause coalesces bursts of mail/name/config writes.
           await cx.sleep(1000);
           this.refreshMetadata(cx);
-
+          this.refreshAsks(cx);
         }
       } catch { this.watchedConfigs.delete(folder); } // Slow polling remains available.
     });
@@ -92,7 +123,7 @@ export default class Herd extends View {
         for (const key of Object.keys(this.infos)) if (!eligible.has(key)) { delete this.infos[key]; delete this.artifacts[key]; }
       } finally {
         this.metadataBusy = false;
-
+        this.refreshAsks(cx);
         cx.notify();
       }
     });
@@ -100,6 +131,31 @@ export default class Herd extends View {
 
   showArtifact(artifact) {
     openOverlay({ mod: 'herd', kind: 'dialog', width: 820, height: 650, props: { artifactPreview: artifact } });
+  }
+
+  showAsks(items = this.asks) {
+    openOverlay({ mod: 'herd', kind: 'dialog', width: 740, height: 700, props: { askList: items } });
+  }
+
+  askRow(ask, t, detail = false) {
+    return v_flex().id(`herd-ask-${ask.id}`).p(detail ? 12 : 8).gap(5).rounded(7).bg(t.raised)
+      .when(!detail, el => el.cursor_pointer().hover(el => el.bg(t.hover)).on_click(() => this.showAsks([ask])))
+      .child(div().text_size(9.5).text_color(t.dim).child(ask.from))
+      .child(div().text_size(detail ? 12 : 10.5).text_color(t.foreground).child(detail ? ask.question : questionExcerpt(ask)))
+      .when(detail, el => el
+        .when(Boolean(ask.options?.length), el => el.child(div().text_size(11).text_color(t.muted).child(`Options: ${ask.options?.join(' · ')}`)))
+        .when(Boolean(ask.recommendation), el => el.child(div().text_size(11).text_color(t.muted).child(`Recommended: ${ask.recommendation}`)))
+        .when(Boolean(ask.blocks), el => el.child(div().text_size(11).text_color(t.muted).child(`Waiting: ${ask.blocks}`)))
+        .child(div().text_size(9.5).text_color(t.dim).child(ask.id)));
+  }
+
+  askListView(t) {
+    return v_flex().size_full().min_h(0).p(16).gap(12).bg(t.surface)
+      .child(h_flex().items_center().justify_between()
+        .child(div().text_size(14).font_semibold().text_color(t.foreground).child(`Asks to you · ${this.askList.length}`))
+        .child(div().id('herd-close-asks').p(6).text_color(t.muted).cursor_pointer().on_click(() => closeOverlay(props().overlay)).child('Close')))
+      .child(v_flex().id('herd-ask-details').flex_1().min_h(0).gap(9).overflow_y_scrollbar().children(this.askList.map(ask => this.askRow(ask, t, true))))
+      .child(div().text_size(10.5).text_color(t.muted).child('Answers go through your liaison.'));
   }
 
   artifactView(artifact, t, width, maxHeight) {
@@ -261,6 +317,7 @@ export default class Herd extends View {
 
   render() {
     const t = theme();
+    if (this.askList) return this.askListView(t);
     if (this.preview) return this.previewView(t);
     const groups = this.snapshot();
     const seats = groups.flatMap(group => group.seats);
@@ -303,8 +360,14 @@ export default class Herd extends View {
             .when(!prompts.length, el => el.child(div().text_size(10.5).text_color(t.dim).child(this.lastCheck ? `No recognized prompts · ${coverage}` : 'Checking quiet personal seats…')))
             .children(prompts.map(prompt => this.promptRow(prompt, t, now))))
           .child(v_flex().p(8).gap(4).rounded(9).border(1).border_color(t.border)
-            .child(div().text_size(10.5).text_color(t.muted).child('Asks to you'))
-            .child(div().text_size(10.5).text_color(t.dim).child('The asks ledger is not connected yet.')))))
+            .child(h_flex().justify_between()
+              .child(div().text_size(10.5).text_color(t.muted).child('Asks to you'))
+              .child(div().text_size(10).text_color(t.dim).child(String(this.asks?.length ?? 0))))
+            .when(this.asksError, el => el.child(div().text_size(10).text_color(t.muted).child('Could not refresh · showing last known asks')))
+            .when(!this.asks?.length && !this.asksError, el => el.child(div().text_size(10.5).text_color(t.dim).child(this.asksChecked ? 'No open asks in the configured institutions.' : 'Loading personal asks…')))
+            .children((this.asks ?? []).slice(0, 2).map(ask => this.askRow(ask, t)))
+            .when(Boolean(this.asks?.length), el => el.child(div().id('herd-all-asks').py(5).text_size(10.5).text_color(t.muted).cursor_pointer()
+              .hover(el => el.text_color(t.foreground)).on_click(() => this.showAsks()).child(`View all ${this.asks.length} asks →`))))))
         .when(!groups.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child('No seats are running here yet.')))
         .children((compact ? groups : localGroups).map(group => this.card(group, t, now, compact)))
         .child(div().h(8)))

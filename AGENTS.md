@@ -6,7 +6,7 @@ Use the user-level frontend-quality skill for visual work. GPUI is native JavaSc
 
 `seat-agents` and `layouts/seats-main.json` are the existing fallback. The new `herd` mod and `layouts/herd.json`
 provide institution cards, nested seat tiles and a needs-you strip. Prompt rules and pure metadata projections live
-in `herd/model.mjs`; the asks lane is a phase-1 stub. No model is used. Never bake personal names, paths or secrets
+in `herd/model.mjs`; the asks lane reads the kit's aggregate current-state interface. No model is used. Never bake personal names, paths or secrets
 into this public repository. Screen checks exclude Work, remote terminals and working seats; reads are cached and
 retain only a recognized quote. They never send keystrokes or approve a prompt.
 
@@ -22,6 +22,9 @@ Artifact metadata comes only from the personal seats kit's `seats info --json` s
 institution identity and local scope; `artifact-reader.mjs` reads the newest committed match of the declared glob and
 caches bounded committed PNGs under the application home's `herd-cache/`. Node and Git provide the optional artifact reader; no npm packages or image decoder are required. Keep cache files out of Git. No automatic LFS fetch, shell config parsing in the mod,
 uncommitted-image fallback, Work/remote reads or default layout activation. Run the Node checks.
+
+`asks.mjs` validates the read-only `seats asks --to al --all --json` response. No answer, withdrawal or notification
+command belongs in this mod. Preserve the last successful list with a stale indicator on refresh failure.
 
 <!-- al-stack:project:start -->
 ## Al-stack project
