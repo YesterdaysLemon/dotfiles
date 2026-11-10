@@ -12,6 +12,7 @@ import * as sentences from './sentences.mjs';
 import * as facts from './facts.mjs';
 import * as grid from './grid.mjs';
 import * as askText from './ask-text.mjs';
+import * as pins from './pins.mjs';
 
 // Exercise the shipped view's real callbacks with a tiny GPUI description recorder.
 // Native layout/paint is checked separately by herdr-app and review screenshots.
@@ -48,7 +49,8 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
     'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity', 'questionBlocks',
-    'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi', 'gridGeometry'];
+    'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi', 'gridGeometry',
+    'PIN_STORE', 'readPins', 'pinKey', 'personalPinGroup', 'makePin', 'resolvePin', 'matchingPin', 'togglePin'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
   const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'closeOverlay', 'window', 'settings', 'hc', 'panes', 'spaces', 'focused', ...names, source)(
@@ -61,7 +63,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
     () => appSettings,
     args => execute('hc', args),
     () => native.panes, () => native.spaces, () => native.focus,
-    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid, ...askText })[name]),
+    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid, ...askText, ...pins })[name]),
   );
   const view = new Herd();
   const seat = { address: 't1', pane: 'p1', space: 's1', name: 'Sample', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample', institution: 'sample' };
@@ -682,4 +684,87 @@ test('album fit compensates native size events for app zoom at narrow width',()=
  view.render().values.on_size_change({width:500,height:700},{notify(){}});
  const content=find(view.render(),'herd-album-viewport').childNodes[0];
  assert.equal(content.values.w,210);assert.equal(content.childNodes[0].values.w,210);assert.equal(content.childNodes[0].values.h,105);
+});
+
+function pinHarness() {
+  const h = harness();
+  const group = { key: 'sample', workspace: 'sample', name: 'Sample', status: 'idle', quiet: true, seats: [h.seat] };
+  h.view.snapshot = () => [group]; h.view.askerGroups = [group];
+  h.view.infos = { sample: { checked: Date.now(), cwd: h.seat.cwd, info: { schema_version: 1, workspace: 'sample', project: h.seat.cwd,
+    config_dir: h.seat.cwd + '/.claude/seats', conductor: 'maker', roles: [{ role: 'maker' }] } } };
+  h.view.asksChecked = Date.now(); h.view.artifacts = {};
+  return { ...h, group };
+}
+
+test('real Pin/Unpin controls persist only preferences, stop row navigation, and keep Needs you first', async () => {
+  const { view, calls, sharedState } = pinHarness();
+  const tasks = []; let stopped = 0;
+  const cx = { notify() {}, stop_propagation() { stopped++; }, spawn(body) { tasks.push(body(cx)); } };
+  find(view.render(), 'herd-pin-toggle-sample-t1').click({}, cx);
+  await Promise.all(tasks);
+  assert.equal(stopped, 1); assert.deepEqual(calls, []);
+  assert.deepEqual(sharedState.get(pins.PIN_STORE).items.map(pin => pin.kind), ['conductor']);
+  const tree = view.render(), order = tree.childNodes.map(node => node?.values?.id);
+  assert.ok(order.indexOf('herd-needs') < order.indexOf('herd-pinned'));
+  assert.ok(order.indexOf('herd-pinned') < order.indexOf('herd-scroll'));
+  find(tree, 'herd-pinned-remove-0').click({}, cx);
+  assert.deepEqual(sharedState.get(pins.PIN_STORE).items, []);
+  assert.equal(find(view.render(), 'herd-pinned'), null);
+  assert.deepEqual(calls, []);
+});
+
+test('a reloaded view resolves a renamed successor before opening, and its pin does not add any screen candidates', () => {
+  const first = pinHarness(), { view, seat, calls, sharedState } = pinHarness();
+  const pref = pins.makePin(first.group, first.seat, first.view.infos, 'C:/Users/example');
+  sharedState.set(pins.PIN_STORE, JSON.parse(JSON.stringify({ version: 1, items: [pref] })));
+  Object.assign(seat, { address: 't99', pane: 'p99', name: 'Successor', role: 'vizier', space: 's2' });
+  view.infos.sample.info.conductor = 'vizier'; view.infos.sample.info.roles[0].role = 'vizier';
+  view.snapshot = () => [];
+  const tree = view.render();
+  find(tree, 'herd-pinned-open-0').click();
+  assert.deepEqual(calls, [['pane.focus', { pane: 'p99' }]]);
+  view.askerGroups = []; find(tree, 'herd-pinned-open-0').click();
+  assert.equal(calls.length, 1, 'a stale rendered button rechecks the live target');
+  assert.deepEqual(view.snapshot(), [], 'pin preferences do not insert the outside seat into screen-reader scope');
+});
+
+test('compact shelf retains Unpin; Work suppresses all personal pin faces, controls and navigation', () => {
+  const { view, group, seat, sharedState, calls } = pinHarness();
+  sharedState.set(pins.PIN_STORE, { version: 1, items: [pins.makePin(group, seat, view.infos, 'C:/Users/example')] });
+  view.width = 100;
+  assert.ok(find(view.render(), 'herd-pinned-remove-0'));
+  view.personalView = false;
+  const tree = view.render();
+  assert.equal(find(tree, 'herd-pinned'), null);
+  assert.equal(find(tree, 'herd-pin-toggle-sample-t1'), null);
+  view.openPin(sharedState.get(pins.PIN_STORE).items[0]);
+  assert.deepEqual(calls, []);
+});
+
+test('pinning an institution uses its real navigation and cannot merge a seat pin into it', () => {
+  const { view, sharedState, calls } = pinHarness();
+  view.refreshMetadata = () => {};
+  const cx = { notify() {}, stop_propagation() {} };
+  find(view.render(), 'herd-pin-toggle-sample-institution').click({}, cx);
+  assert.equal(sharedState.get(pins.PIN_STORE).items[0].kind, 'institution');
+  find(view.render(), 'herd-pinned-open-0').click();
+  assert.deepEqual(calls, [['pane.focus', { pane: 'p1' }]]);
+});
+
+test('off-space pin metadata refresh reads only curated kit info, with no image or terminal reader', async () => {
+  const commands = [];
+  const { view, seat } = harness(new Map(), async (...args) => {
+    commands.push(args);
+    return { code: 0, stdout: JSON.stringify({ schema_version: 1, workspace: 'sample', project: seat.cwd,
+      config_dir: seat.cwd + '/.claude/seats', conductor: 'maker', roles: [{ role: 'maker' }], artifact_state: 'ready', artifact: 'renders/*.png' }) };
+  });
+  view.askerGroups = [{ key: 'sample', workspace: 'sample', seats: [seat] }];
+  view.snapshot = () => []; view.infos = {}; view.artifacts = {}; view.watchedConfigs = new Set();
+  view.watchConfig = () => {}; view.refreshAsks = () => {};
+  view.pinPreferences = () => [{ workspace: 'sample', project: seat.cwd.toLowerCase(), kind: 'conductor' }];
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.refreshMetadata(cx); await task;
+  assert.equal(commands.length, 1);
+  assert.deepEqual(commands[0].slice(0, 2), ['seats', ['--project', seat.cwd, 'info', '--json']]);
+  assert.equal(view.artifacts.sample, null);
 });

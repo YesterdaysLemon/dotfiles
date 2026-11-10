@@ -10,6 +10,7 @@ import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, rec
 import { publishFacts, consumeFacts, forgetFacts } from './facts.mjs';
 import { validateGrid, boundGrid, gridTarget, gridSeats, restoreGridPlan, gridApi, gridGeometry } from './grid.mjs';
 import { questionBlocks } from './ask-text.mjs';
+import { PIN_STORE, readPins, pinKey, personalPinGroup, makePin, resolvePin, matchingPin, togglePin } from './pins.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
 const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states') || '{}'); } catch { return {}; } };
@@ -175,13 +176,14 @@ export default class Herd extends View {
     this.metadataBusy = true;
     cx.spawn(async cx => {
       try {
-        const groups = this.snapshot();
+        const scoped = this.snapshot();
         if (!this.personalView) return;
+        const groups = this.pinMetadataGroups(scoped);
         const candidates = groups.map(group => ({ group, cwd: artifactSource(group, home()) }))
           .filter(({ group, cwd }) => cwd && (!this.infos[group.key] || this.infos[group.key].cwd !== cwd || Date.now() - this.infos[group.key].checked >= INFO_TTL))
           .sort((a, b) => (this.infos[a.group.key]?.checked ?? 0) - (this.infos[b.group.key]?.checked ?? 0)).slice(0, 4);
         for (const { group, cwd } of candidates) {
-          const before = this.snapshot().find(g => g.key === group.key);
+          const before = this.pinMetadataGroups(this.snapshot()).find(g => g.key === group.key);
           if (!this.personalView) break;
           if (!before || artifactSource(before, home()) !== cwd) continue;
           let info = null;
@@ -191,19 +193,21 @@ export default class Herd extends View {
             if (result.code === 0) info = acceptInfo(JSON.parse(result.stdout), group, home());
             this.snapshot();
             if (!this.personalView) break;
-            if (info?.artifact_state === 'ready' && typeof info.artifact === 'string' && info.artifact) {
+            // An explicit personal pin adds curated kit metadata only, never an artifact reader.
+            const visible = this.snapshot().some(g => g.key === group.key);
+            if (visible && info?.artifact_state === 'ready' && typeof info.artifact === 'string' && info.artifact) {
               const preview = await exec('node', [appHome() + '/mods/herd/artifact-reader.mjs', '--repo', info.project, '--glob', info.artifact,
                 '--home', home(), '--app-home', appHome()], { timeout: 15000 });
               if (preview.code === 0) artifact = acceptArtifact(JSON.parse(preview.stdout));
             }
           } catch { /* Missing metadata support deliberately leaves the label-only fallback. */ }
-          const live = this.snapshot().find(g => g.key === group.key);
+          const live = this.pinMetadataGroups(this.snapshot()).find(g => g.key === group.key);
           if (!this.personalView || !live || artifactSource(live, home()) !== cwd) continue;
           this.infos[group.key] = { checked: Date.now(), cwd, info };
           this.artifacts[group.key] = artifact;
           if (info) this.watchConfig(info.config_dir, cx);
         }
-        const eligible = new Set(this.snapshot().filter(g => artifactSource(g, home())).map(g => g.key));
+        const eligible = new Set(this.pinMetadataGroups(this.snapshot()).filter(g => artifactSource(g, home())).map(g => g.key));
         for (const key of Object.keys(this.infos)) if (!eligible.has(key)) { delete this.infos[key]; delete this.artifacts[key]; }
       } finally {
         this.metadataBusy = false;
@@ -721,6 +725,78 @@ export default class Herd extends View {
     else run('terminal.peek', { terminal: seat.address });
   }
 
+  pinPreferences() { return readPins(shared(PIN_STORE), home()); }
+
+  pinMetadataGroups(scoped) {
+    const pins = this.pinPreferences(), all = this.askerGroups || scoped;
+    const visible = new Set(scoped.map(group => group.key));
+    return all.filter(group => visible.has(group.key) || (personalPinGroup(group, home()) && pins.some(pin => pin.workspace === group.workspace)));
+  }
+
+  pinTarget(groupKey, address) {
+    const group = (this.askerGroups || []).find(group => group.key === groupKey);
+    const seat = address ? group?.seats.find(seat => seat.address === address) : null;
+    return address && !seat ? null : makePin(group, seat, this.infos, home());
+  }
+
+  changePin(groupKey, address, cx) {
+    this.snapshot();
+    if (!this.personalView) return;
+    const target = this.pinTarget(groupKey, address);
+    if (!target) return;
+    setShared(PIN_STORE, { version: 1, items: togglePin(this.pinPreferences(), target, this.askerGroups || [], this.infos, home()) });
+    this.refreshMetadata(cx); cx.notify();
+  }
+
+  removePin(pin, cx) {
+    setShared(PIN_STORE, { version: 1, items: this.pinPreferences().filter(item => pinKey(item) !== pinKey(pin)) });
+    cx.notify();
+  }
+
+  openPin(pin) {
+    this.snapshot();
+    if (!this.personalView) return;
+    const current = resolvePin(pin, this.askerGroups || [], this.infos, home());
+    if (current.state === 'ready') this.jump(current.seat);
+  }
+
+  pinButton(groupKey, address, t, compact) {
+    const target = this.pinTarget(groupKey, address);
+    const pinned = matchingPin(this.pinPreferences(), target, this.askerGroups || [], this.infos, home());
+    return this.askButton(`herd-pin-toggle-${groupKey}-${address || 'institution'}`, compact ? (pinned ? '−' : '+') : (pinned ? 'Unpin' : 'Pin'), cx => {
+      cx.stop_propagation(); this.changePin(groupKey, address, cx);
+    }, t, !target).px(compact ? 3 : 6).py(compact ? 2 : 4).text_size(compact ? 9 : 10)
+      .tooltip(target ? `${pinned ? 'Unpin' : 'Pin'} ${address ? (target.kind === 'conductor' ? 'the institution’s front desk; follows role renames and rotations' : 'this seat; follows rotations and recorded role renames') : 'this institution'}` : 'Waiting for personal institution metadata');
+  }
+
+  pinnedShelf(t, compact) {
+    const pins = this.pinPreferences();
+    if (!pins.length || !this.personalView) return null;
+    return v_flex().id('herd-pinned').px(compact ? 4 : 10).pb(8).gap(4).flex_none()
+      .child(div().px(3).text_size(compact ? 9 : 10).font_semibold().text_color(t.muted).child('PINNED'))
+      .child(v_flex().id('herd-pinned-scroll').h(Math.min(compact ? 150 : 180, pins.length * (compact ? 66 : 52))).min_h(0).gap(4).overflow_y_scrollbar()
+        .children(pins.map((pin, index) => {
+          const current = resolvePin(pin, this.askerGroups || [], this.infos, home());
+          const ready = current.state === 'ready';
+          const name = pin.kind === 'institution' ? current.group?.name || pin.workspace : ready ? current.seat.name : pin.kind === 'conductor' ? 'Front desk' : pin.role;
+          const context = pin.kind === 'institution' ? (ready ? `${current.group.seats.length} seats` : 'Not running') : ready ? `${current.seat.role} · ${current.group.name}` : pin.workspace;
+          return (compact ? v_flex() : h_flex()).id(`herd-pinned-row-${index}`).px(compact ? 2 : 7).py(5).gap(compact ? 2 : 7).items_center()
+            .flex_none().rounded(7).bg(t.surface).border(1).border_color(t.border)
+            .child((compact ? v_flex() : h_flex()).id(`herd-pinned-open-${index}`).flex_1().min_w(0).gap(7).items_center()
+              .when(compact, el => el.flex_none())
+              .when(ready, el => el.cursor_pointer().hover(el => el.bg(t.hover)))
+              .tooltip(`${name} · ${context}${ready ? '\nOpen the current terminal' : current.state === 'ambiguous' ? '\nMore than one live seat matches; refresh before opening' : '\nNot running or metadata unavailable'}`)
+              .on_click(() => this.openPin(pin))
+              .when(ready && pin.kind !== 'institution', el => el.child(this.face(current.seat, t, compact ? 23 : 28)))
+              .when(pin.kind === 'institution' || !ready, el => el.child(div().size(compact ? 23 : 28).rounded(6).bg(t.raised).text_size(10).text_color(t.muted).flex().items_center().justify_center().child(pin.kind === 'institution' ? name.slice(0, 2) : '·')))
+              .when(!compact, el => el.child(v_flex().flex_1().min_w(0).gap(2)
+                .child(div().truncate().text_size(11.5).text_color(ready ? t.foreground : t.muted).child(name))
+                .child(div().truncate().text_size(9.5).text_color(t.dim).child(ready ? context : current.state === 'ambiguous' ? 'Multiple live matches' : `Not running · ${context}`)))))
+            .child(this.askButton(`herd-pinned-remove-${index}`, compact ? '−' : 'Unpin', cx => { cx.stop_propagation(); this.removePin(pin, cx); }, t)
+              .px(compact ? 3 : 5).py(compact ? 2 : 4).text_size(compact ? 9 : 10));
+        })));
+  }
+
   face(seat, t, size = 30) {
     if (seat.avatar) return image(seat.avatar).w(size).h(size).flex_none();
     if (seat.program?.icon) return (seat.program.tint ? svg(seat.program.icon).text_color(t.muted) : image(seat.program.icon)).w(size - 6).h(size - 6).flex_none();
@@ -750,7 +826,7 @@ export default class Herd extends View {
       pending: 'Screen quote pending', expired: 'Screen quote expired', unavailable: 'Screen unavailable', unrecognized: 'No current screen quote',
     }[sentence?.kind];
     const quoteTip = sentence ? `${sentence.kind === 'quote' ? 'Literal visible screen quote' : quoteLabel}${sentence.checked ? ` · checked ${duration(now - sentence.checked)} ago` : ''}. Rules can miss progress text.` : '';
-    return h_flex().id(`herd-seat-${seat.address}`).px(compact ? 3 : 7).py(6).gap(9).rounded(7).items_center().cursor_pointer()
+    return (compact ? v_flex() : h_flex()).id(`herd-seat-${seat.address}`).px(compact ? 3 : 7).py(6).gap(compact ? 2 : 9).rounded(7).items_center().cursor_pointer()
       .when(seat.focused, el => el.bg(t.selected))
       .when(quiet, el => el.opacity(0.68))
       .hover(el => el.bg(t.hover).opacity(1))
@@ -766,7 +842,8 @@ export default class Herd extends View {
           .when(seat.fixture, el => el.child(div().text_size(9).text_color(t.dim).child('fixture'))))
         .when(Boolean(seat.statusLine && seat.statusLine !== seat.role && seat.statusLine !== seat.name), el => el.child(div().truncate().text_size(10).text_color(t.dim).tooltip('Self-reported terminal metadata').child(seat.statusLine)))
         .when(sentence?.kind === 'quote', el => el.child(this.sentenceRow(sentence, quoteLabel, quoteTip, seat.address, t, now)))))
-      .when(!compact, el => el.child(div().text_size(11).text_color(t.dim).child('›')));
+      .when(this.personalView, el => el.child(this.pinButton(seat.institution, seat.address, t, compact)))
+      .when(!compact && !this.personalView, el => el.child(div().text_size(11).text_color(t.dim).child('›')));
   }
 
   card(group, t, now, compact) {
@@ -782,15 +859,16 @@ export default class Herd extends View {
     const summary = counts.join(' · ');
     const lead = group.seats.find(s => s.status === group.status) || group.seats[0];
     return v_flex().id(`herd-card-${group.key}`).p(compact ? 3 : 8).gap(3).rounded(10).bg(t.surface).border(1).border_color(t.border)
-      .child(h_flex().id(`herd-institution-${group.key}`).px(5).py(4).gap(6).items_center().cursor_pointer()
+      .child(h_flex().id(`herd-institution-${group.key}`).px(compact ? 0 : 5).py(4).gap(compact ? 2 : 6).flex_wrap().items_center().cursor_pointer()
         .hover(el => el.bg(t.hover))
         .tooltip(`${group.name}${group.machine ? ' · ' + group.machine : ''}\n${summary}`)
         .on_click(() => this.jump(lead))
         .child(div().flex_1().min_w(0).truncate().font_semibold().text_size(compact ? 10 : 13).text_color(group.quiet ? t.muted : t.foreground).child(compact ? group.name.slice(0, 2) : group.name))
         .when(!compact, el => el.child(div().text_size(10).text_color(t.dim).child(String(group.seats.length))))
-        .when(Boolean(grid), el => el.child(this.askButton(`herd-grid-open-${group.key}`, grid?.shown ? 'Terminals' : 'Grid', cx => {
+        .when(this.personalView, el => el.child(this.pinButton(group.key, null, t, compact)))
+        .when(Boolean(grid), el => el.child(this.askButton(`herd-grid-open-${group.key}`, compact ? (grid?.shown ? 'T' : 'G') : (grid?.shown ? 'Terminals' : 'Grid'), cx => {
           cx.stop_propagation(); this.openGrid(group, cx);
-        }, t, this.gridBusy))))
+        }, t, this.gridBusy).when(compact, el => el.px(3).py(2).text_size(9)))))
       .when(!compact, el => el.child(div().px(5).pb(4).text_size(10).text_color(t.dim).child(summary)))
       .when(!compact && Boolean(artifact), el => el.child(div().id(`herd-artifact-${group.key}`).px(5).py(4).cursor_pointer()
         .tooltip(`${artifact.path}\nCommit ${artifact.commit}\nOpen cached preview`)
@@ -809,6 +887,36 @@ export default class Herd extends View {
         .child(div().px(4).py(2).rounded(3).border(1).border_color(t.input).text_size(9).text_color(t.muted).child(prompt.key)))
       .child(div().text_size(10.5).text_color(t.muted).child(prompt.quote))
       .child(div().text_size(9.5).text_color(t.dim).child(`${prompt.title} · open to review${prompt.fixture ? ' · fixture' : ''}`));
+  }
+
+  needsView(t, prompts, inbox, coverage, compact) {
+    const now = Date.now();
+    if (compact) return div().id('herd-needs').px(4).pb(6).flex_none()
+      .child(this.askButton('herd-compact-asks', `! ${inbox.length + prompts.length}`, () => this.showAsks(), t)
+        .tooltip(`Needs you: ${inbox.length} asks · ${prompts.length} terminal prompts`));
+    return v_flex().id('herd-needs').px(10).pb(8).gap(6).flex_none()
+      .child(h_flex().px(3).items_center().justify_between()
+        .child(div().text_size(10.5).font_semibold().text_color(t.muted).child('NEEDS YOU'))
+        .child(div().id('herd-refresh').p(3).text_size(10).text_color(t.dim).cursor_pointer().hover(el => el.text_color(t.foreground))
+          .tooltip('Share up to four screen reads per 45 seconds between quiet prompts and Project Codex quotes; reuse cached checks for 90 seconds.')
+          .on_click((_event, cx) => this.scan(cx)).child(this.scanning ? 'Checking…' : '↻')))
+      .child(v_flex().id('herd-needs-scroll').h(Math.min(240, 110 + prompts.length * 84 + Math.min(inbox.length, 2) * 60 + (inbox.length ? 24 : 0))).min_h(0).gap(5).overflow_y_scrollbar()
+        .child(v_flex().gap(5).p(7).rounded(9).border(1).border_color(prompts.length ? t.input : t.border)
+          .child(h_flex().justify_between()
+            .child(div().text_size(10.5).text_color(t.muted).child('At the terminal'))
+            .child(div().text_size(10).text_color(t.dim).child(String(prompts.length))))
+          .when(!prompts.length, el => el.child(div().text_size(10.5).text_color(t.dim).child(this.lastCheck ? `No recognized prompts · ${coverage}` : 'Checking quiet personal seats…')))
+          .children(prompts.map(prompt => this.promptRow(prompt, t, now))))
+        .child(v_flex().p(8).gap(4).rounded(9).border(1).border_color(t.border)
+          .child(h_flex().justify_between()
+            .child(div().text_size(10.5).text_color(t.muted).child('Asks to you'))
+            .child(div().text_size(10).text_color(t.dim).child(String(inbox.length))))
+          .when(this.asksBusy, el => el.child(div().text_size(10).text_color(t.muted).child('Checking… · showing last known asks')))
+          .when(this.asksError && !this.asksBusy, el => el.child(div().text_size(10).text_color(t.muted).child('Could not refresh · showing last known asks')))
+          .when(!this.asks?.length && !this.asksError, el => el.child(div().text_size(10.5).text_color(t.dim).child(this.asksChecked ? 'No open asks in the configured institutions.' : 'Loading personal asks…')))
+          .children(inbox.slice(0, 2).map(ask => this.askRow(ask, t)))
+          .when(Boolean(inbox.length), el => el.child(div().id('herd-all-asks').py(5).text_size(10.5).text_color(t.muted).cursor_pointer()
+            .hover(el => el.text_color(t.foreground)).on_click(() => this.showAsks()).child(`View all ${inbox.length} asks →`)))));
   }
 
   render() {
@@ -843,33 +951,13 @@ export default class Herd extends View {
         .child(div().flex_1().text_size(compact ? 11 : 15).font_semibold().text_color(t.foreground).child('Herd'))
         .when(!compact, el => el.child(div().max_w(180).truncate().text_size(10).text_color(t.dim).child(this.spaceName || `${localGroups.length} institutions`))))
       .when(Boolean(this.gridError), el => el.child(div().px(16).pb(6).text_size(10.5).text_color(t.blocked).child(this.gridError)))
+      .when(this.personalView, el => el.child(this.needsView(t, prompts, inbox, coverage, compact)))
+      .when(this.personalView && this.pinPreferences().length > 0, el => el.child(this.pinnedShelf(t, compact)))
       .when(!compact && outsidePins.length > 0, el => el.child(h_flex().px(12).pb(7).gap(5).flex_wrap().items_center()
-        .child(div().text_size(9).text_color(t.dim).child('Pinned'))
+        .child(div().text_size(9).text_color(t.dim).child('Terminal pins'))
         .children(outsidePins.map(seat => div().id(`herd-pin-${seat.address}`).px(5).py(3).rounded(4).bg(t.surface).text_size(10).text_color(t.muted)
           .cursor_pointer().tooltip(`${seat.name} · ${seat.role}`).on_click(() => this.jump(seat)).child(`${seat.name} · ${seat.role}`)))))
       .child(v_flex().id('herd-scroll').flex_1().min_h(0).px(compact ? 4 : 10).gap(9).overflow_y_scrollbar().mode('always')
-        .when(!compact && this.personalView, el => el.child(v_flex().gap(6).mb(3)
-          .child(h_flex().px(3).items_center().justify_between()
-            .child(div().text_size(10.5).font_semibold().text_color(t.muted).child('NEEDS YOU'))
-            .child(div().id('herd-refresh').p(3).text_size(10).text_color(t.dim).cursor_pointer().hover(el => el.text_color(t.foreground))
-              .tooltip('Share up to four screen reads per 45 seconds between quiet prompts and Project Codex quotes; reuse cached checks for 90 seconds.')
-              .on_click((_event, cx) => this.scan(cx)).child(this.scanning ? 'Checking…' : '↻')))
-          .child(v_flex().gap(5).p(7).rounded(9).border(1).border_color(prompts.length ? t.input : t.border)
-            .child(h_flex().justify_between()
-              .child(div().text_size(10.5).text_color(t.muted).child('At the terminal'))
-              .child(div().text_size(10).text_color(t.dim).child(String(prompts.length))))
-            .when(!prompts.length, el => el.child(div().text_size(10.5).text_color(t.dim).child(this.lastCheck ? `No recognized prompts · ${coverage}` : 'Checking quiet personal seats…')))
-            .children(prompts.map(prompt => this.promptRow(prompt, t, now))))
-          .child(v_flex().p(8).gap(4).rounded(9).border(1).border_color(t.border)
-            .child(h_flex().justify_between()
-              .child(div().text_size(10.5).text_color(t.muted).child('Asks to you'))
-              .child(div().text_size(10).text_color(t.dim).child(String(inbox.length))))
-            .when(this.asksBusy, el => el.child(div().text_size(10).text_color(t.muted).child('Checking… · showing last known asks')))
-            .when(this.asksError && !this.asksBusy, el => el.child(div().text_size(10).text_color(t.muted).child('Could not refresh · showing last known asks')))
-            .when(!this.asks?.length && !this.asksError, el => el.child(div().text_size(10.5).text_color(t.dim).child(this.asksChecked ? 'No open asks in the configured institutions.' : 'Loading personal asks…')))
-            .children(inbox.slice(0, 2).map(ask => this.askRow(ask, t)))
-            .when(Boolean(inbox.length), el => el.child(div().id('herd-all-asks').py(5).text_size(10.5).text_color(t.muted).cursor_pointer()
-              .hover(el => el.text_color(t.foreground)).on_click(() => this.showAsks()).child(`View all ${inbox.length} asks →`))))))
         .when(!groups.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child('No seats are running here yet.')))
         .children((compact ? groups : localGroups).map(group => this.card(group, t, now, compact)))
         .child(div().h(8)))

@@ -35,6 +35,15 @@ returns to it, and Terminals restores the original split/focus/zoom. Never rebui
 Switching to seats-main starts a bounded Node handoff that removes validated owned grid panes and restores focus;
 otherwise a zoomed pane would survive the layout fallback. It never closes a terminal or edits shipped mods.
 
+The pinned shelf stores only versioned preferences in `herd.pins.v1` shared state. Needs you comes first; shelf and
+triage have bounded native scroll areas, with explicit heights (max-height alone collapses these native scroll
+contents). A pin resolves against current local personal labels and source-bound kit metadata on every click.
+Conductor pins use the conductor slot; other seat pins replay ordered `info.renames` events after their saved
+history cursor, preserving reused-role distinctions. Do not infer identity from names, terminal IDs or roster order.
+Missing/ambiguous pins remain removable. UI pins never enter screen-reader candidates or expand artifact/remote
+scope; off-space refreshes may read curated kit metadata only. Native terminal pins remain separate. Check real
+Pin/Unpin callbacks, saved-state restart, replacement/renamed holders, navigation and compact layouts in isolated QA.
+
 Artifact metadata comes only from the personal seats kit's `seats info --json` schema v1. `artifacts.mjs` validates
 institution identity and local scope; `artifact-reader.mjs` reads the newest committed match of the declared glob and
 caches bounded committed PNGs under the application home's `herd-cache/`. Node and Git provide the optional artifact reader; no npm packages or image decoder are required. Keep cache files out of Git. No automatic LFS fetch, shell config parsing in the mod,
