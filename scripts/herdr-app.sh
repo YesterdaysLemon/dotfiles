@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Herdr app (the GUI, `herdr-app`): put my layout, agents panel, keys and settings in its home, and show the layout.
 #
-#   scripts/herdr-app.sh           install: link (macOS/Linux) or copy (Windows) the files, then show seats-main
-#   scripts/herdr-app.sh capture   Windows: copy the live files back here after changing them in the app
+#   scripts/herdr-app.sh           install: link (macOS/Linux) or copy (Windows) the files, then show seats-main;
+#                                  herd's files are copied everywhere, so re-run after pulling to update them
+#   scripts/herdr-app.sh capture   copy the copied files (all on Windows, herd's everywhere) back here after changing them in the app
 #
 # Safe to re-run. The app writes everything else in its home itself (state, generated types, its shipped mods), so
 # only these files live here, and stow skips this folder (.stowrc).
@@ -18,6 +19,9 @@ files=(settings.json keys.json layouts/seats-main.json mods/seat-agents/main.js 
   mods/herd/grid.mjs mods/herd/facts.mjs mods/herd/grid-exit.mjs mods/herd/pins.mjs)
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) windows=1 ;; *) windows=0 ;; esac
 app() { MSYS2_ARG_CONV_EXCL='*' herdr-app "$@"; }
+# herd's modules import each other (./model.mjs, ...), and the app refuses a module that resolves outside its mod
+# folder, so linked herd files fail `herdr-app check` on macOS. Copy herd everywhere; link the rest off Windows.
+copied() { ((windows)) || [[ "$1" == mods/herd/* ]]; }
 
 if [[ "${1:-install}" == capture ]]; then
   for f in "${files[@]}"; do [[ -L "$home/$f" ]] || cp "$home/$f" "$src/$f"; done
@@ -29,7 +33,8 @@ for f in "${files[@]}"; do
   mkdir -p "$(dirname "$home/$f")"
   # Keep a different existing file once, beside it, rather than overwriting it silently.
   if [[ -e "$home/$f" && ! -L "$home/$f" ]] && ! cmp -s "$src/$f" "$home/$f"; then cp "$home/$f" "$home/$f.before-dotfiles"; fi
-  if ((windows)); then cp "$src/$f" "$home/$f"; else ln -sfn "$src/$f" "$home/$f"; fi
+  # rm first: cp onto an earlier link would write through it into this repo.
+  if copied "$f"; then rm -f "$home/$f"; cp "$src/$f" "$home/$f"; else ln -sfn "$src/$f" "$home/$f"; fi
 done
 
 # Which layout shows is Herdr's own state (shared.json "layout"), not a setting, so this script picks it:
