@@ -21,8 +21,10 @@ herdr: `curl -fsSL https://herdr.dev/install.sh | sh`, then `herdr integration i
 ## herdr app (macOS and Windows)
 
 The herdr GUI (`herdr-app`) keeps its home in `~/.config/herdr-app`, alongside files it writes itself. Only mine live
-here, under `dot-config/herdr-app/`: `settings.json`, `keys.json`, the `seats-main` layout and the `seat-agents` panel
-(the agents list with one header per seats institution, and rows that read "role · name"). Stow skips that folder;
+here, under `dot-config/herdr-app/`: `keys.json`, the `seats-main` layout and the `seat-agents` panel
+(the agents list with one header per seats institution, and rows that read "role · name"). `settings.json` is per
+machine (zoom, font size and appearance differ by screen): install seeds it once from `settings.default.json` and
+never links or captures it. Stow skips that folder;
 place it with:
 
 ```sh

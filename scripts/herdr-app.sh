@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Herdr app (the GUI, `herdr-app`): put my layout, agents panel, keys and settings in its home, and show the layout.
+# Herdr app (the GUI, `herdr-app`): put my layout, agents panel and keys in its home, and show the layout.
+# settings.json is per machine (Al, 2026-11-10): zoom, font size and appearance differ by screen. Install seeds it once
+# from settings.default.json, turns an old link into the machine's own copy, and never links or captures it.
 #
 #   scripts/herdr-app.sh           install: link (macOS/Linux) or copy (Windows) the files, then show seats-main;
 #                                  herd's files are copied everywhere, so re-run after pulling to update them
@@ -13,7 +15,7 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 src="$repo/dot-config/herdr-app"
 home="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 layout="seats-main"
-files=(settings.json keys.json layouts/seats-main.json mods/seat-agents/main.js mods/seat-agents/mod.json
+files=(keys.json layouts/seats-main.json mods/seat-agents/main.js mods/seat-agents/mod.json
   layouts/herd.json layouts/herd.svg mods/herd/main.js mods/herd/mod.json mods/herd/model.mjs
   mods/herd/artifacts.mjs mods/herd/artifact-reader.mjs mods/herd/spaces.mjs mods/herd/asks.mjs mods/herd/answer-runner.mjs mods/herd/sentences.mjs mods/herd/script-runner.mjs mods/herd/ask-text.mjs
   mods/herd/grid.mjs mods/herd/facts.mjs mods/herd/grid-exit.mjs mods/herd/pins.mjs)
@@ -28,6 +30,11 @@ if [[ "${1:-install}" == capture ]]; then
   git -C "$repo" status --short -- dot-config/herdr-app
   exit 0
 fi
+
+# Per-machine settings: an old link becomes this machine's own copy (same contents); a missing file gets the default.
+mkdir -p "$home"
+if [[ -L "$home/settings.json" ]]; then cp "$home/settings.json" "$home/settings.json.tmp"; rm -f "$home/settings.json"; mv "$home/settings.json.tmp" "$home/settings.json"
+elif [[ ! -e "$home/settings.json" ]]; then cp "$src/settings.default.json" "$home/settings.json"; fi
 
 for f in "${files[@]}"; do
   mkdir -p "$(dirname "$home/$f")"
