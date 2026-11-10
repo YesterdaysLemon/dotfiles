@@ -45,6 +45,16 @@ seats from another space stay reachable above the cards. Work uses labels, state
 terminal metadata only. It shows no familiar faces and runs no metadata, Git, artifact, screen or model readers.
 Personal previews, prompt checks and asks are active only in a personal space. No institution names are built in.
 
+**Pin** on a seat or institution adds a compact shortcut below Needs you, ahead of the scrolling herd. **Unpin**
+removes it without changing terminal focus. Pins are saved in Herdr's shared state and keep their insertion order;
+clicking a shortcut resolves and opens the current terminal. A front-desk pin follows the institution's configured
+conductor, including role renames. Other seat pins follow the kit's ordered `renames` metadata after the point the
+pin was made, so a reused role name cannot redirect an old pin. That rename field requires a kit version which
+provides it; absent history still supports same-role rotation. Missing or ambiguous targets stay removable and
+never open an old terminal. Compact widths retain the shortcuts and Unpin controls. These personal pins do not
+appear in Work views or add screen, artifact or remote readers. Off-space pins refresh curated personal institution
+metadata only. Native terminal pins remain separate and expire with their terminal.
+
 Each institution has a **Grid** button. It opens its seats as native tiles in that institution's tab: familiar,
 name and role, state and observed time, and a sourced sentence when available. Quiet seats remain visible and state
 changes do not reorder the tiles. Equal tiles fill the pane with small gutters and highlight on hover.
