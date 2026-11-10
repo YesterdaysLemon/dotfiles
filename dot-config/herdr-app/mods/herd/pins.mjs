@@ -4,7 +4,7 @@ import { personalFolder } from './spaces.mjs';
 import { artifactSource } from './artifacts.mjs';
 
 export const PIN_STORE = 'herd.pins.v1';
-const word = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
+const word = value => typeof value === 'string' && /^[a-z][a-z0-9_-]{0,47}$/.test(value);
 const text = value => typeof value === 'string' && value.length > 0 && value.length <= 1024 && !/[\x00-\x1f]/.test(value);
 
 export function pinKey(pin) { return JSON.stringify([pin.workspace, pin.project, pin.kind, pin.role || '', pin.after || 0]); }
