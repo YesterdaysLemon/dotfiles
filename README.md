@@ -57,6 +57,9 @@ provides it; absent history still supports same-role rotation. Missing or ambigu
 never open an old terminal. Compact widths retain the shortcuts and Unpin controls. These personal pins do not
 appear in Work views or add screen, artifact or remote readers. Off-space pins refresh curated personal institution
 metadata only. Native terminal pins remain separate and expire with their terminal.
+To exercise the actual kit rename contract in a scratch institution, set `HERD_TEST_SEATS_KIT` to the seats kit
+directory and run `node --test dot-config/herdr-app/mods/herd/pins-kit.test.mjs`. The fixture changes only temporary
+roles/config/history and stubs the terminal backend. The rest of the suite does not require an installed kit.
 
 Each institution has a **Grid** button. It opens its seats as native tiles in that institution's tab: familiar,
 name and role, state and observed time, and a sourced sentence when available. Quiet seats remain visible and state

@@ -900,7 +900,7 @@ export default class Herd extends View {
         .child(div().id('herd-refresh').p(3).text_size(10).text_color(t.dim).cursor_pointer().hover(el => el.text_color(t.foreground))
           .tooltip('Share up to four screen reads per 45 seconds between quiet prompts and Project Codex quotes; reuse cached checks for 90 seconds.')
           .on_click((_event, cx) => this.scan(cx)).child(this.scanning ? 'Checking…' : '↻')))
-      .child(v_flex().id('herd-needs-scroll').h(Math.min(240, 110 + prompts.length * 84 + Math.min(inbox.length, 2) * 60 + (inbox.length ? 24 : 0))).min_h(0).gap(5).overflow_y_scrollbar()
+      .child(v_flex().id('herd-needs-scroll').h(Math.min(240, 128 + prompts.length * 84 + Math.min(inbox.length, 2) * 60 + (inbox.length ? 24 : 0))).min_h(0).gap(5).overflow_y_scrollbar()
         .child(v_flex().gap(5).p(7).rounded(9).border(1).border_color(prompts.length ? t.input : t.border)
           .child(h_flex().justify_between()
             .child(div().text_size(10.5).text_color(t.muted).child('At the terminal'))

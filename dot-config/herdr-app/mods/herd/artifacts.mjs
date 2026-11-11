@@ -30,6 +30,6 @@ export function fitArtifact(value, availableWidth, maxHeight = 160) {
 
 export function configChanges(paths, folder) {
   const root = pathKey(folder);
-  const relevant = new Set(['seats.conf', 'roles', 'names', 'asks.jsonl', 'ask-routes']);
+  const relevant = new Set(['seats.conf', 'roles', 'names', 'role-history.tsv', 'asks.jsonl', 'ask-routes']);
   return paths.some(path => pathKey(path) === root || relevant.has(pathKey(path).split('/').at(-1)));
 }

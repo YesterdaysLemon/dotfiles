@@ -43,5 +43,6 @@ test('read locks and mail do not turn watchers into a metadata refresh loop', ()
   assert.equal(configChanges([root + '/asks.lock', root + '/asks.lock/owner', root + '/mail.jsonl'], root), false);
   assert.equal(configChanges([root + '/asks.jsonl'], root), true);
   assert.equal(configChanges([root + '/seats.conf'], root), true);
+  assert.equal(configChanges([root + '/role-history.tsv'], root), true);
   assert.equal(configChanges([root], root), true);
 });
