@@ -47,7 +47,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
     focus: { space: 's1', tab: 'tab', pane: 'p1' } };
   const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {} }) };
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
-    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
+    'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'askTalkTarget', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity', 'questionBlocks',
     'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi', 'gridGeometry',
     'PIN_STORE', 'readPins', 'pinKey', 'personalPinGroup', 'makePin', 'resolvePin', 'matchingPin', 'togglePin'];
@@ -762,6 +762,84 @@ test('off-space pin metadata refresh reads only curated kit info, with no image 
   view.snapshot = () => []; view.infos = {}; view.artifacts = {}; view.watchedConfigs = new Set();
   view.watchConfig = () => {}; view.refreshAsks = () => {};
   view.pinPreferences = () => [{ workspace: 'sample', project: seat.cwd.toLowerCase(), kind: 'conductor' }];
+  let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
+  view.refreshMetadata(cx); await task;
+  assert.equal(commands.length, 1);
+  assert.deepEqual(commands[0].slice(0, 2), ['seats', ['--project', seat.cwd, 'info', '--json']]);
+  assert.equal(view.artifacts.sample, null);
+});
+
+function talkHarness(viewProps = {}) {
+  const h = harness(new Map(), undefined, undefined, viewProps);
+  const group = { key: 'sample', workspace: 'sample', name: 'Sample', seats: [h.seat] };
+  h.view.askerGroups = [group]; h.view.snapshot = () => [group]; h.view.allSpaces = h.native.spaces;
+  h.view.infos = {};
+  const ask = { id: 'sample:talk', from: 'sample/maker', to: 'al', state: 'open', question: 'Which build?',
+    opened_at: '2026-11-10T12:00:00Z', owner_project: h.seat.cwd, options: ['One', 'Two'] };
+  return { ...h, group, ask };
+}
+
+test('the real Talk control focuses the current pane without answering, sending text or reopening the inbox', () => {
+  const { view, ask, calls, sharedState, storage } = talkHarness();
+  let stopped = 0;
+  const button = find(view.askRow(ask, {}, false), 'herd-talk-' + ask.id);
+  assert.equal(button.childNodes[0], 'Talk to Sample');
+  button.click({}, { stop_propagation() { stopped++; }, notify() {} });
+  assert.equal(stopped, 1);
+  assert.deepEqual(calls, [['pane.focus', { pane: 'p1' }]]);
+  assert.deepEqual(view.answerStates, {}); assert.equal(sharedState.size, 0); assert.equal(storage.size, 0);
+  assert.equal(ask.state, 'open');
+});
+
+test('Talk dismisses only its own inbox and rechecks a replacement holder after render', () => {
+  const { view, ask, seat, native, calls } = talkHarness({ overlay: 'own-inbox' });
+  const button = find(view.askRow(ask, {}, true), 'herd-talk-' + ask.id);
+  Object.assign(seat, { address: 't8', pane: 'p8', name: 'Replacement' });
+  native.panes.splice(0, 1, { pane: 'p8', terminal: 't8', tab: 'tab' });
+  button.click({}, { stop_propagation() {}, notify() {} });
+  assert.deepEqual(calls, [['closeOverlay', 'own-inbox'], ['pane.focus', { pane: 'p8' }]]);
+});
+
+test('Talk reveals its destination when another pane or grid owns the tab zoom', () => {
+  const { view, ask, native, calls } = talkHarness({ overlay: 'own-inbox' });
+  native.panes.push({ pane: 'grid', mod: 'herd', tab: 'tab', zoomed: true });
+  find(view.askRow(ask, {}, true), 'herd-talk-' + ask.id).click({}, { stop_propagation() {}, notify() {} });
+  assert.deepEqual(calls, [['pane.zoom', { pane: 'p1' }], ['closeOverlay', 'own-inbox'], ['pane.focus', { pane: 'p1' }]]);
+});
+
+test('a vanished target or a Work transition keeps the ask and overlay intact', () => {
+  for (const work of [false, true]) {
+    const { view, ask, group, calls } = talkHarness({ overlay: 'own-inbox' });
+    const button = find(view.askRow(ask, {}, true), 'herd-talk-' + ask.id);
+    if (work) view.personalView = false; else group.seats.length = 0;
+    button.click({}, { stop_propagation() {}, notify() {} });
+    assert.deepEqual(calls, []); assert.equal(ask.state, 'open');
+    assert.ok(view.talkErrors[ask.id]);
+    assert.ok(find(view.askRow(ask, {}, true), 'herd-answer-option-' + ask.id + '-0'));
+  }
+});
+
+test('full inbox initialization refreshes asking-seat metadata and keeps its slow refresh', () => {
+  const ask = { id: 'sample:talk', from: 'sample/maker', to: 'al', state: 'open', question: 'Which build?', opened_at: '2026-11-10T12:00:00Z' };
+  const { view } = harness(new Map(), undefined, undefined, { askList: [ask] });
+  let metadata = 0, later;
+  view.refreshMetadata = () => { metadata++; }; view.refreshAsks = () => {}; view.loadEvidence = () => {};
+  view.init({}, { timer: { every(ms, body) { assert.equal(ms, 60000); later = body; } } });
+  assert.equal(metadata, 1); later({}); assert.equal(metadata, 2);
+});
+
+test('off-space asking-seat metadata is curated only; an unpinned ask does not add an artifact reader', async () => {
+  const commands = [];
+  const { view, seat, sharedState } = harness(new Map(), async (...args) => {
+    commands.push(args);
+    return { code: 0, stdout: JSON.stringify({ schema_version: 1, workspace: 'sample', project: seat.cwd,
+      config_dir: seat.cwd + '/.claude/seats', conductor: 'maker', roles: [{ role: 'maker' }], renames: [], artifact_state: 'ready', artifact: 'renders/*.png' }) };
+  });
+  view.askerGroups = [{ key: 'sample', workspace: 'sample', seats: [seat] }];
+  view.snapshot = () => []; view.infos = {}; view.artifacts = {}; view.watchedConfigs = new Set();
+  view.askList = [{ id: 'sample:talk', from: 'sample/maker', owner_project: seat.cwd }];
+  view.watchConfig = () => {}; view.refreshAsks = () => {};
+  assert.equal(sharedState.has(pins.PIN_STORE), false);
   let task; const cx = { notify() {}, spawn(body) { task = body(cx); } };
   view.refreshMetadata(cx); await task;
   assert.equal(commands.length, 1);

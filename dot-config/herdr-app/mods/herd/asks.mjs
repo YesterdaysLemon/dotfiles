@@ -1,6 +1,7 @@
 // Current-state projection and guarded explicit answer arguments. No shell text.
 import { personalFolder, spaceHerd } from './spaces.mjs';
 import { pathKey, safeAvatar } from './model.mjs';
+import { artifactSource, acceptInfo } from './artifacts.mjs';
 export const ASK_TTL = 120000;
 
 export function scriptPath(value) {
@@ -68,6 +69,46 @@ export function askerProfile(ask, groups, userHome, personalView, infos = {}) {
   if (candidates.length !== 1) return null;
   const seat = candidates[0];
   return { name: seat.name, role: seat.role, avatar: safeAvatar(seat.avatar), party: ask.from };
+}
+
+// Talk opens a current pane, never a remembered address or a guessed namesake.
+export function askTalkTarget(ask, groups, allPanes, allSpaces, userHome, personalView, infos = {}) {
+  const unavailable = reason => ({ state: 'unavailable', reason });
+  if (!personalView || !personalFolder(ask?.owner_project, userHome)) return unavailable('The owning personal institution is unavailable.');
+  const party = /^([a-z][a-z0-9_-]*)(?:\/([a-z][a-z0-9_-]*))?$/.exec(ask.from || '');
+  if (!party || party[1] === 'al') return unavailable('This ask has no asking seat.');
+  const owner = pathKey(ask.owner_project), opened = Date.parse(ask.opened_at);
+  const underOwner = cwd => pathKey(cwd) === owner || pathKey(cwd).startsWith(owner + '/');
+  const candidates = [];
+  for (const group of groups) {
+    if (group.machine) continue;
+    const entry = infos?.[group.key];
+    const info = entry?.info && pathKey(entry.cwd) === pathKey(artifactSource(group, userHome))
+      ? acceptInfo(entry.info, group, userHome) : null;
+    const canonical = info && pathKey(info.project) === owner;
+    if (!(group.workspace === party[1] || (party[1] === ask.id?.split(':')[0] && canonical))) continue;
+    let role = party[2] || (canonical ? info.conductor : null);
+    if (!role) continue;
+    if (canonical) {
+      const renames = info.renames ?? [];
+      if (!Array.isArray(renames) || renames.length > 10000 || !Number.isFinite(opened) || renames.some(event =>
+        !/^[a-z][a-z0-9_-]{0,47}$/.test(event?.from || '') || !/^[a-z][a-z0-9_-]{0,47}$/.test(event?.to || '') ||
+        typeof event.at !== 'string' || !Number.isFinite(Date.parse(event.at)))) continue;
+      // Institution parties already name the current conductor. A seat party
+      // follows only renames since its ask opened, not older reused role names.
+      if (party[2]) for (const event of renames) if (Date.parse(event.at) >= opened && event.from === role) role = event.to;
+    }
+    candidates.push(...group.seats.filter(seat => seat.role === role && seat.address && !seat.address.includes('/') &&
+      !seat.machine && personalFolder(seat.cwd, userHome) && (canonical || underOwner(seat.cwd))));
+  }
+  if (candidates.length !== 1) return unavailable(candidates.length ? 'More than one live seat matches this asker.' : 'The asking seat is unavailable. Refresh to check again.');
+  const seat = { ...candidates[0], avatar: safeAvatar(candidates[0].avatar) };
+  const panes = allPanes.filter(pane => pane.pane === seat.pane && pane.terminal === seat.address && !pane.mod);
+  if (panes.length !== 1) return { ...unavailable('This seat has no live pane.'), seat };
+  const pane = panes[0];
+  const destination = allSpaces.find(space => space.id === seat.space && !space.machine && space.tabs?.some(tab => tab.id === pane.tab));
+  if (!destination || !spaceHerd(groups, allSpaces, destination.id, userHome).personal) return unavailable('This seat is outside the local personal view.');
+  return { state: 'ready', seat, pane, space: destination.id };
 }
 
 export function answerCommand(ask, text, userHome) {

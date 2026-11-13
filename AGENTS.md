@@ -75,6 +75,15 @@ supports `.ps1` scripts only: Windows PowerShell on Windows, `pwsh` elsewhere. `
 the file digest inside the terminal before launching with inherited stdio and argv, never a shell command string.
 No live renewal or real-ask execution in tests; use a harmless committed scratch script. Include the helper in install.
 
+Talk on an ask resolves its party, personal owner and current native pane on every click. Follow ordered kit
+renames since opened_at; institution parties use their configured conductor. Canonical kit metadata binds a seat
+working in a separate worktree. Reject unavailable, ambiguous, Work/remote or mismatched pane targets. Close only
+the invoking ask overlay, then focus the resolved pane; reveal it if another pane owns that tab's zoom, preserving
+the grid receipt and terminal splits. Never paste, start a terminal or answer the ask. Inbox copies refresh curated
+asking-institution metadata, including off-space targets, without adding artifact/screen readers. Native QA must
+exercise actual fixture focus, own-overlay closure, zoom, a successor with real kit rename history, unavailable
+state and unchanged fixture ledger bytes. Keep B/C conversation prototypes in the ark separate from this feature.
+
 `sentences.mjs` recognizes bounded literal Codex assistant prose. It skips queued input, menus, tool bodies,
 credential-like assignments and ambiguous frames. A missing/expired quote stays unavailable on hover only; never invent
 a summary or derive it from a stale terminal title. Test scope/program/pane changes, read-budget sharing, no quote

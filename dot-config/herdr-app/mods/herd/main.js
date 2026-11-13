@@ -4,7 +4,7 @@ import { v_flex, h_flex, InputState, Input } from 'gpui-base';
 import { agents, terminals, panes, spaces, focused, run, theme, shared, setShared, home, appHome, hc, props, nextCommand, exec, watchFolder, openOverlay, closeOverlay, window, settings } from 'herdr';
 import { CACHE_MS, projectHerd, withPromptStates, stateHistory, duration, promptCandidates, currentPrompts, detectPrompt, screenText, pathKey, canReadScreen } from './model.mjs';
 import { INFO_TTL, personalFolder, artifactSource, acceptInfo, acceptArtifact, fitArtifact, configChanges, seatsExecutable } from './artifacts.mjs';
-import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, answerCommand, acceptedAnswer, askImages, scriptSpace } from './asks.mjs';
+import { ASK_TTL, parseAsks, questionExcerpt, askGroups, askerProfile, askTalkTarget, answerCommand, acceptedAnswer, askImages, scriptSpace } from './asks.mjs';
 import { spaceHerd, orderSpaceGroups } from './spaces.mjs';
 import { SCREEN_READ_LIMIT, canReadCodexQuote, detectCodexQuote, quoteState, recentReadTimes, screenCandidates, screenIdentity } from './sentences.mjs';
 import { publishFacts, consumeFacts, forgetFacts } from './facts.mjs';
@@ -60,7 +60,8 @@ export default class Herd extends View {
     if (this.askList) {
       this.prepareAskInputs();
       this.loadEvidence(cx);
-      cx.timer.every(60000, cx => this.refreshAsks(cx));
+      this.refreshMetadata(cx);
+      cx.timer.every(60000, cx => { this.refreshAsks(cx); this.refreshMetadata(cx); });
       return;
     }
     this.factOwner = {};
@@ -426,16 +427,42 @@ export default class Herd extends View {
       .on_click((_event, cx) => { if (!disabled) action(cx); }).child(label);
   }
 
+  talkTarget(ask) {
+    return askTalkTarget(ask, this.askerGroups || [], this.livePanes || [], this.allSpaces || [], home(), this.personalView, this.infos);
+  }
+
+  talkToAsker(ask, cx) {
+    this.snapshot();
+    const target = this.talkTarget(ask);
+    this.talkErrors ||= {};
+    if (target.state !== 'ready') { this.talkErrors[ask.id] = target.reason; cx.notify(); return; }
+    delete this.talkErrors[ask.id];
+    // A grid or another terminal may own this tab's zoom. Keep zoom mode while
+    // revealing the requested seat, preserving every pane and the grid receipt.
+    if (this.livePanes.some(pane => pane.tab === target.pane.tab && pane.zoomed && pane.pane !== target.pane.pane)) {
+      run('pane.zoom', { pane: target.pane.pane });
+    }
+    // Match Herdr's palette navigation: dismiss only this ask overlay, then focus.
+    if (props()?.overlay) closeOverlay(props().overlay);
+    run('pane.focus', { pane: target.pane.pane });
+  }
+
   askRow(ask, t, detail = false) {
     const writable = this.personalView && personalFolder(ask.owner_project, home());
-    const asker = askerProfile(ask, this.askerGroups || [], home(), this.personalView, this.infos);
+    const talk = this.talkTarget(ask);
+    const asker = talk.seat || askerProfile(ask, this.askerGroups || [], home(), this.personalView, this.infos);
     return v_flex().id(`herd-ask-${ask.id}`).p(detail ? 12 : 8).gap(5).rounded(7).bg(t.raised)
       .when(!detail, el => el.cursor_pointer().hover(el => el.bg(t.hover)).on_click(() => this.showAsks()))
       .child(h_flex().gap(7).items_center().tooltip(asker ? `Current holder of ${ask.from}` : ask.from)
         .child(this.face(asker || { name: ask.from }, t, detail ? 32 : 26))
-        .child(v_flex().min_w(0).gap(2)
+        .child(v_flex().flex_1().min_w(0).gap(2)
           .child(div().truncate().text_size(detail ? 12 : 10.5).text_color(t.muted).child(asker ? `${asker.name} · ${asker.role}` : ask.from))
-          .when(Boolean(asker), el => el.child(div().truncate().text_size(9).text_color(t.dim).child(ask.from)))))
+          .when(Boolean(asker), el => el.child(div().truncate().text_size(9).text_color(t.dim).child(ask.from))))
+        .child(this.askButton(`herd-talk-${ask.id}`, talk.seat ? `Talk to ${talk.seat.name}` : 'Talk unavailable', cx => {
+          cx.stop_propagation(); this.talkToAsker(ask, cx);
+        }, t, talk.state !== 'ready').max_w(detail ? 240 : 155).truncate().flex_none().px(7).py(5).text_size(detail ? 11 : 10)
+          .tooltip(talk.state === 'ready' ? `Focus ${talk.seat.name}, ${talk.seat.role}. Continue in the existing terminal; the decision stays open.` : talk.reason)))
+      .when(Boolean(this.talkErrors?.[ask.id] && talk.state !== 'ready'), el => el.child(div().text_size(10.5).text_color(t.muted).child(this.talkErrors[ask.id])))
       .child(detail ? this.questionView(ask.question, t) : div().text_size(10.5).text_color(t.foreground).child(questionExcerpt(ask)))
       .when(detail, el => el
         .children(askImages(ask).map(path => {
@@ -729,8 +756,11 @@ export default class Herd extends View {
 
   pinMetadataGroups(scoped) {
     const pins = this.pinPreferences(), all = this.askerGroups || scoped;
+    const asks = (this.askList || this.asks || []).filter(ask => personalFolder(ask.owner_project, home()));
     const visible = new Set(scoped.map(group => group.key));
-    return all.filter(group => visible.has(group.key) || (personalPinGroup(group, home()) && pins.some(pin => pin.workspace === group.workspace)));
+    return all.filter(group => visible.has(group.key) || (personalPinGroup(group, home()) &&
+      (pins.some(pin => pin.workspace === group.workspace) || asks.some(ask => ask.from.split('/')[0] === group.workspace ||
+        group.seats.some(seat => pathKey(seat.cwd) === pathKey(ask.owner_project))))));
   }
 
   pinTarget(groupKey, address) {
