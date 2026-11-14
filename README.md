@@ -61,6 +61,14 @@ To exercise the actual kit rename contract in a scratch institution, set `HERD_T
 directory and run `node --test dot-config/herdr-app/mods/herd/pins-kit.test.mjs`. The fixture changes only temporary
 roles/config/history and stubs the terminal backend. The rest of the suite does not require an installed kit.
 
+Ask cards have a **Talk to name** control that opens the current asking seat's existing pane. It closes only its
+own inbox window and keeps the decision open. The target is resolved again on click, so a replacement holder or
+recorded role rename is followed. Institution askers use their configured conductor. Missing or ambiguous targets
+show Talk unavailable; a same-name terminal is never substituted. If another pane owns the destination tab's zoom,
+Talk reveals the target while preserving the pane IDs and splits. It never pastes a message or writes an answer.
+The full inbox refreshes curated metadata for its named personal asking institutions, including those in another
+space; this adds no screen, artifact or remote readers.
+
 Each institution has a **Grid** button. It opens its seats as native tiles in that institution's tab: familiar,
 name and role, state and observed time, and a sourced sentence when available. Quiet seats remain visible and state
 changes do not reorder the tiles. Equal tiles fill the pane with small gutters and highlight on hover.
