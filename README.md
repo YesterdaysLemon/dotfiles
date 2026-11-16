@@ -142,6 +142,19 @@ Slow refreshes show Checking and retain the last list for up to 120 seconds; a f
 Confirmed sends disappear across open views; no answers or drafts
 are persisted in mod state. Config watchers plus slow polling refresh the per-institution snapshots; they are not globally atomic.
 
+Each option also has **Ask about this option**. Write one question and press **Send question**: the kit opens a
+linked child ask from Al to the current asking role. Pending, answered and withdrawn clarifications appear beneath
+their option. The original decision stays open, and **Choose this option** still records that decision separately.
+**Refresh questions** checks the owning ledger; an unavailable refresh retains the previous cards with a stale
+notice. Role renames follow the kit's history, and a missing role leaves previous answers visible while sending
+is unavailable. Authors in another institution are unsupported in this first slice.
+
+Clarifications require Node and use the existing kit rather than a chat transport. A small local journal outside
+mods prevents the same question on the same option from being sent twice, including after a lost receipt or app
+restart. **Check delivery** reads without resending; uncertain attempts remain uncertain until the owning ledger
+can establish the child. The journal contains IDs and attempt metadata; question/answer text lives in the kit's
+ledger. No messages are pasted into terminals, no model runs, and nothing is written under the watched mods tree.
+
 An ask with a committed `.ps1` `run` path gets a plain Open terminal button. It uses the kit's read-only
 `_asks-run-check` gate and checks HEAD plus working bytes, then opens a tab labelled with the ask ID in the owning
 institution's personal space (or the current personal space). The launcher checks again before running Windows
