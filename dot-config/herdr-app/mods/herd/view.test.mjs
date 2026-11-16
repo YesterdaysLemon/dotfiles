@@ -13,6 +13,7 @@ import * as facts from './facts.mjs';
 import * as grid from './grid.mjs';
 import * as askText from './ask-text.mjs';
 import * as pins from './pins.mjs';
+import * as clarifications from './clarifications.mjs';
 
 // Exercise the shipped view's real callbacks with a tiny GPUI description recorder.
 // Native layout/paint is checked separately by herdr-app and review screenshots.
@@ -45,12 +46,12 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   const native = { panes: [{ pane: 'p1', terminal: 't1', tab: 'tab', zoomed: false }],
     spaces: [{ id: 's1', name: 'First', folder: userHome + '/Project/sample', machine: null, tabs: [{ id: 'tab' }] }],
     focus: { space: 's1', tab: 'tab', pane: 'p1' } };
-  const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {} }) };
+  const InputState = { new: options => ({ text: options?.value || '', value() { return this.text; }, set_value(text) { this.text = text; }, on() {}, focus() {} }) };
   const names = ['CACHE_MS', 'projectHerd', 'withPromptStates', 'stateHistory', 'duration', 'promptCandidates', 'currentPrompts', 'detectPrompt', 'screenText', 'pathKey', 'canReadScreen',
     'INFO_TTL', 'personalFolder', 'artifactSource', 'acceptInfo', 'acceptArtifact', 'fitArtifact', 'configChanges', 'seatsExecutable', 'ASK_TTL', 'parseAsks', 'questionExcerpt', 'askGroups', 'askerProfile', 'askTalkTarget', 'answerCommand', 'acceptedAnswer', 'askImages', 'scriptSpace',
     'SCREEN_READ_LIMIT', 'canReadCodexQuote', 'detectCodexQuote', 'quoteState', 'recentReadTimes', 'screenCandidates', 'screenIdentity', 'questionBlocks',
     'publishFacts', 'consumeFacts', 'forgetFacts', 'validateGrid', 'boundGrid', 'gridTarget', 'gridSeats', 'restoreGridPlan', 'gridApi', 'gridGeometry',
-    'PIN_STORE', 'readPins', 'pinKey', 'personalPinGroup', 'makePin', 'resolvePin', 'matchingPin', 'togglePin'];
+    'PIN_STORE', 'readPins', 'pinKey', 'personalPinGroup', 'makePin', 'resolvePin', 'matchingPin', 'togglePin', 'clarificationQuestion', 'parseClarificationResponse'];
   const source = readFileSync(new URL('./main.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '').replace('export default class Herd', 'return class Herd');
   const Herd = new Function('View', 'div', 'image', 'svg', 'v_flex', 'h_flex', 'Input', 'InputState', 'run', 'theme', 'shared', 'setShared', 'home', 'localStorage', 'props', 'exec', 'appHome', 'openOverlay', 'closeOverlay', 'window', 'settings', 'hc', 'panes', 'spaces', 'focused', ...names, source)(
@@ -63,7 +64,7 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
     () => appSettings,
     args => execute('hc', args),
     () => native.panes, () => native.spaces, () => native.focus,
-    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid, ...askText, ...pins })[name]),
+    ...names.map(name => ({ ...model, ...artifacts, ...asks, ...sentences, ...facts, ...grid, ...askText, ...pins, ...clarifications })[name]),
   );
   const view = new Herd();
   const seat = { address: 't1', pane: 'p1', space: 's1', name: 'Sample', role: 'maker', status: 'idle', cwd: userHome + '/Project/sample', institution: 'sample' };
@@ -73,10 +74,79 @@ function harness(storage = new Map(), execute = async () => ({ code: 1 }), userH
   view.width = 340;
   view.lastCheck = Date.now();
   view.answerStates = {}; view.askInputs = {}; view.evidence = {}; view.scriptStates = {};
+  view.clarifications = {}; view.clarifyInputs = {}; view.clarifyStates = {}; view.clarifyOpen = {};
   view.livePanes = native.panes; view.liveSpaces = native.spaces; view.liveFocus = native.focus;
   view.cache = { t1: { checked: Date.now(), cwd: model.pathKey(seat.cwd), prompt: { id: 'claude-trust', title: 'Folder trust', key: 'Enter', quote: 'Do you trust the files in this folder?' } } };
   return { view, seat, calls, storage, sharedState, native };
 }
+
+test('option clarification callbacks send a child once, fold its receipt, and keep the parent answer available', async () => {
+  const commands = [], tasks = [];
+  const ask = { id: 'sample:parent', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', options: ['Shelf', 'Cards'], opened_at: '2026-11-15T12:00:00Z', owner_project: 'C:/Users/example/Project/sample' };
+  const { view, sharedState } = harness(new Map(), async (command, args) => {
+    commands.push([command, args]);
+    const request = JSON.parse(args[1]);
+    assert.equal(request.mode, 'send'); assert.equal(request.parent.id, ask.id);
+    return { code: 0, stdout: JSON.stringify({ schema: 1, state: 'sent', parents: [{ id: ask.id, target: { party: ask.from, name: 'Guide' }, items: [
+      { id: 'sample:child', option: 'Shelf', question: request.question.trim(), state: 'open' },
+    ] }] }) };
+  });
+  view.askList = [ask]; view.prepareAskInputs();
+  view.clarifications[ask.id] = { target: { party: ask.from, name: 'Guide' }, items: [] };
+  const cx = { notify() {}, spawn: body => tasks.push(body(cx)) };
+  find(view.askListView({}), 'herd-clarify-open-' + ask.id + '-0').click({}, cx);
+  view.clarifyInputs[ask.id + '|0'].set_value('Does it survive a restart?');
+  const send = find(view.askListView({}), 'herd-clarify-send-' + ask.id + '-0');
+  send.click({}, cx); send.click({}, cx); await Promise.all(tasks);
+  assert.equal(commands.length, 1); assert.equal(commands[0][0], 'node');
+  assert.equal(view.askInputs[ask.id].value(), ''); assert.deepEqual(view.answerStates, {}); assert.equal(sharedState.has('herd.askOutcomes'), false);
+  assert.ok(find(view.askListView({}), 'herd-clarification-sample:child'));
+  assert.ok(find(view.askListView({}), 'herd-answer-option-' + ask.id + '-0').click);
+});
+
+test('a lost clarification receipt exposes Check delivery, whose callback never repeats a send', async () => {
+  const modes = [], tasks = [];
+  const ask = { id: 'sample:parent', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', options: ['Shelf'], opened_at: '2026-11-15T12:00:00Z', owner_project: 'C:/Users/example/Project/sample' };
+  const { view } = harness(new Map(), async (_command, args) => {
+    const request = JSON.parse(args[1]); modes.push(request.mode);
+    if (request.mode === 'send') throw new Error('timeout');
+    return { code: 0, stdout: JSON.stringify({ schema: 1, state: 'unconfirmed', parents: [{ id: ask.id, target: { party: ask.from, name: 'Guide' }, items: [] }] }) };
+  });
+  view.askList = [ask]; view.clarifications[ask.id] = { target: { party: ask.from, name: 'Guide' }, items: [] };
+  const cx = { notify() {}, spawn: body => tasks.push(body(cx)) };
+  view.openClarification(ask, 0, cx); view.clarifyInputs[ask.id + '|0'].set_value('A question');
+  view.sendClarification(ask, 0, cx); await tasks.pop();
+  const check = find(view.askListView({}), 'herd-clarify-send-' + ask.id + '-0'); check.click({}, cx); await tasks.pop();
+  assert.deepEqual(modes, ['send', 'confirm']); assert.equal(view.clarifyStates[ask.id + '|0'].unconfirmed, 'A question');
+  view.personalView = false; view.sendClarification(ask, 0, cx); assert.equal(modes.length, 2);
+});
+
+test('clarification refresh reads explicit personal owners only and retains cards after failed reads', async () => {
+  const commands = [], tasks = [];
+  const ask = { id: 'sample:parent', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', options: ['Shelf'], owner_project: 'C:/Users/example/Project/sample' };
+  const { view } = harness(new Map(), async (...args) => { commands.push(args); return { code: 1 }; });
+  view.askList = [ask, { ...ask, id: 'other:parent', owner_project: 'C:/Users/example/Work/other' }];
+  view.clarifications[ask.id] = { items: [{ id: 'sample:child', option: 'Shelf', question: 'Existing', state: 'answered', answer: 'Yes', answered_by: ask.from }] };
+  const cx = { notify() {}, spawn: body => tasks.push(body(cx)) };
+  view.refreshClarifications(cx); await tasks.pop();
+  assert.equal(commands.length, 1); const request = JSON.parse(commands[0][1][1]);
+  assert.deepEqual(request.parents, [ask.id]); assert.equal(request.project, ask.owner_project); assert.equal(request.mode, 'read');
+  assert.equal(view.clarifications[ask.id].stale, true); assert.equal(view.clarifications[ask.id].items.length, 1);
+  view.personalView = false; view.refreshClarifications(cx); assert.equal(commands.length, 1);
+});
+
+test('an older clarification read cannot overwrite a send completed while that read was in flight', async () => {
+  let release; const tasks = [];
+  const ask = { id: 'sample:parent', options: ['Shelf'], owner_project: 'C:/Users/example/Project/sample' };
+  const { view } = harness(new Map(), () => new Promise(resolve => { release = resolve; }));
+  view.askList = [ask]; view.clarifications[ask.id] = { items: [] };
+  const cx = { notify() {}, spawn: body => tasks.push(body(cx)) };
+  view.refreshClarifications(cx);
+  const fresh = { items: [{ id: 'sample:new', option: 'Shelf', question: 'New question', state: 'open' }], checked: Date.now() };
+  view.clarifications[ask.id] = fresh;
+  release({ code: 0, stdout: JSON.stringify({ schema: 1, parents: [{ id: ask.id, items: [] }] }) });
+  await tasks[0]; assert.equal(view.clarifications[ask.id], fresh);
+});
 
 test('quiet seats remain visible, dimmed and clickable; rendering sends no terminal actions', () => {
   const { view, calls } = harness();

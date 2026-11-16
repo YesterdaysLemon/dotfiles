@@ -18,7 +18,7 @@ layout="seats-main"
 files=(keys.json layouts/seats-main.json mods/seat-agents/main.js mods/seat-agents/mod.json
   layouts/herd.json layouts/herd.svg mods/herd/main.js mods/herd/mod.json mods/herd/model.mjs
   mods/herd/artifacts.mjs mods/herd/artifact-reader.mjs mods/herd/spaces.mjs mods/herd/asks.mjs mods/herd/answer-runner.mjs mods/herd/sentences.mjs mods/herd/script-runner.mjs mods/herd/ask-text.mjs
-  mods/herd/grid.mjs mods/herd/facts.mjs mods/herd/grid-exit.mjs mods/herd/pins.mjs)
+  mods/herd/grid.mjs mods/herd/facts.mjs mods/herd/grid-exit.mjs mods/herd/pins.mjs mods/herd/clarifications.mjs mods/herd/clarification-runner.mjs)
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) windows=1 ;; *) windows=0 ;; esac
 app() { MSYS2_ARG_CONV_EXCL='*' herdr-app "$@"; }
 # herd's modules import each other (./model.mjs, ...), and the app refuses a module that resolves outside its mod

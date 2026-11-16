@@ -11,6 +11,7 @@ import { publishFacts, consumeFacts, forgetFacts } from './facts.mjs';
 import { validateGrid, boundGrid, gridTarget, gridSeats, restoreGridPlan, gridApi, gridGeometry } from './grid.mjs';
 import { questionBlocks } from './ask-text.mjs';
 import { PIN_STORE, readPins, pinKey, personalPinGroup, makePin, resolvePin, matchingPin, togglePin } from './pins.mjs';
+import { clarificationQuestion, parseClarificationResponse } from './clarifications.mjs';
 
 const STATE = { working: 'Working', blocked: 'Needs you', done: 'Done', idle: 'Quiet', unknown: 'No report' };
 const stored = () => { try { return JSON.parse(localStorage.getItem('herd.states') || '{}'); } catch { return {}; } };
@@ -48,6 +49,10 @@ export default class Herd extends View {
     this.answerStates = {};
     this.scriptStates = {};
     this.askInputs = {};
+    this.clarifications = {};
+    this.clarifyInputs = {};
+    this.clarifyOpen = {};
+    this.clarifyStates = {};
     this.evidence = {};
     this.evidenceBusy = false;
     this.gridBusy = false;
@@ -59,6 +64,7 @@ export default class Herd extends View {
     }
     if (this.askList) {
       this.prepareAskInputs();
+      this.refreshClarifications(cx);
       this.loadEvidence(cx);
       this.refreshMetadata(cx);
       cx.timer.every(60000, cx => { this.refreshAsks(cx); this.refreshMetadata(cx); });
@@ -113,7 +119,7 @@ export default class Herd extends View {
           if (this.answerStates[ask.id]?.sent && !(this.answerStates[ask.id].at > readingAt)) delete this.answerStates[ask.id];
         }
         if (Object.keys(next).length !== Object.keys(outcomes).length) setShared('herd.askOutcomes', next);
-        if (this.askList) { this.askList = items; this.prepareAskInputs(); this.loadEvidence(cx); }
+        if (this.askList) { this.askList = items; this.prepareAskInputs(); this.loadEvidence(cx); this.refreshClarifications(cx); }
         else this.asks = items;
         this.askSource = project;
         this.asksChecked = Date.now();
@@ -311,6 +317,101 @@ export default class Herd extends View {
     }
   }
 
+  refreshClarifications(cx, only = null) {
+    if (this.clarificationsBusy) return;
+    this.snapshot();
+    if (!this.personalView) return;
+    const parents = (only || this.visibleAsks(this.askList)).filter(ask => ask.options?.length && personalFolder(ask.owner_project, home()));
+    const owners = [...new Set(parents.map(ask => ask.owner_project))].slice(0, 24);
+    if (!owners.length) return;
+    this.clarificationsBusy = true;
+    cx.notify();
+    cx.spawn(async cx => {
+      try {
+        for (const project of owners) {
+          this.snapshot(); if (!this.personalView) return;
+          const batch = parents.filter(ask => ask.owner_project === project);
+          const before = new Map(batch.map(ask => [ask.id, this.clarifications[ask.id]]));
+          try {
+            const result = await exec('node', [appHome() + '/mods/herd/clarification-runner.mjs', JSON.stringify({ mode: 'read', project,
+              home: home(), parents: batch.map(ask => ask.id) })], { cwd: project, timeout: 200000 });
+            if (result.code !== 0) throw new Error(result.stderr?.trim().slice(0, 400) || 'Could not check clarifications.');
+            const response = parseClarificationResponse(result.stdout, batch);
+            this.snapshot(); if (!this.personalView) return;
+            for (const row of response.parents) if (this.clarifications[row.id] === before.get(row.id)) this.clarifications[row.id] = { ...row, checked: Date.now() };
+          } catch {
+            for (const ask of batch) if (this.clarifications[ask.id] === before.get(ask.id)) this.clarifications[ask.id] = { ...this.clarifications[ask.id], stale: true, error: 'Could not refresh clarifications. Check again before asking.' };
+          }
+          cx.notify();
+        }
+      } finally { this.clarificationsBusy = false; cx.notify(); }
+    });
+  }
+
+  openClarification(ask, index, cx) {
+    const key = `${ask.id}|${index}`;
+    this.clarifyInputs ||= {}; this.clarifyOpen ||= {};
+    if (!this.clarifyInputs[key]) {
+      const input = InputState.new({ placeholder: 'One question about this option' });
+      input.on('change', (_event, cx) => cx.notify());
+      this.clarifyInputs[key] = input;
+    }
+    this.clarifyOpen[key] = !this.clarifyOpen[key];
+    if (this.clarifyOpen[key]) this.clarifyInputs[key].focus();
+    cx.notify();
+  }
+
+  sendClarification(ask, index, cx) {
+    const key = `${ask.id}|${index}`, previous = this.clarifyStates?.[key];
+    if (previous?.busy) return;
+    this.snapshot();
+    if (!this.personalView || !this.visibleAsks([ask]).length || !personalFolder(ask.owner_project, home())) return;
+    const question = previous?.unconfirmed || this.clarifyInputs?.[key]?.value() || '', option = ask.options[index];
+    try { clarificationQuestion(option, question); }
+    catch (error) { this.clarifyStates[key] = { error: error.message }; cx.notify(); return; }
+    if (!previous?.unconfirmed && (!this.clarifications?.[ask.id]?.target || this.clarifications[ask.id].stale)) return;
+    const request = { mode: previous?.unconfirmed ? 'confirm' : 'send', project: ask.owner_project, home: home(), appHome: appHome(), parent: ask, option, question };
+    this.clarifyStates[key] = { busy: true }; cx.notify();
+    cx.spawn(async cx => {
+      try {
+        const result = await exec('node', [appHome() + '/mods/herd/clarification-runner.mjs', JSON.stringify(request)], { cwd: ask.owner_project, timeout: 300000 });
+        if (result.code !== 0) throw new Error('Could not check delivery.');
+        const response = parseClarificationResponse(result.stdout, [ask]);
+        if (response.parents.length !== 1 || !['sent', 'unconfirmed'].includes(response.state)) throw new Error('Invalid delivery receipt.');
+        if (response.state === 'sent' && response.parents[0].items.filter(card => card.option === option && card.question === question.trim()).length !== 1) throw new Error('No exact child ask receipt.');
+        this.clarifications[ask.id] = { ...response.parents[0], checked: Date.now() };
+        if (response.state === 'sent') {
+          this.clarifyStates[key] = { sent: true };
+          this.clarifyInputs[key]?.set_value(''); this.clarifyOpen[key] = false;
+        } else this.clarifyStates[key] = { unconfirmed: question, error: 'Delivery is unconfirmed. Check delivery before asking again.' };
+      } catch { this.clarifyStates[key] = { unconfirmed: question, error: 'Could not confirm delivery. Check delivery; this will not send again.' }; }
+      finally { cx.notify(); }
+    });
+  }
+
+  optionCard(ask, option, index, t, writable) {
+    const key = `${ask.id}|${index}`, row = this.clarifications?.[ask.id], state = this.clarifyStates?.[key];
+    const answerDisabled = Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable);
+    const cards = (row?.items || []).filter(card => card.option === option);
+    return v_flex().id(`herd-option-${ask.id}-${index}`).p(9).gap(7).rounded(6).border(1).border_color(option === ask.recommendation ? t.accent : t.border)
+      .child(div().text_size(12).text_color(t.foreground).child(option + (option === ask.recommendation ? ' · recommended' : '')))
+      .children(cards.map(card => v_flex().id(`herd-clarification-${card.id}`).p(9).gap(5).rounded(5).bg(t.surface)
+        .child(div().text_size(10).text_color(t.muted).child(card.state === 'open' ? `Waiting for ${row?.target?.name || 'the asking seat'}` : card.state === 'answered' ? `Answered · ${card.answered_by}` : 'Withdrawn'))
+        .child(div().text_size(11.5).text_color(t.foreground).child(`Al: ${card.question}`))
+        .when(card.state === 'answered', el => el.child(this.questionView(card.answer, t)))
+        .when(Boolean(card.reason), el => el.child(div().text_size(11).text_color(t.muted).child(card.reason)))))
+      .child(h_flex().gap(6).flex_wrap()
+        .child(this.askButton(`herd-answer-option-${ask.id}-${index}`, 'Choose this option', cx => this.answerAsk(ask, option, cx), t, answerDisabled, option === ask.recommendation))
+        .child(this.askButton(`herd-clarify-open-${ask.id}-${index}`, this.clarifyOpen?.[key] ? 'Cancel question' : 'Ask about this option', cx => this.openClarification(ask, index, cx), t, !writable || Boolean(state?.busy))))
+      .when(Boolean(this.clarifyOpen?.[key]), el => el
+        .child(Input.new(this.clarifyInputs[key]).id(`herd-clarify-input-${ask.id}-${index}`).h(38).px(8).rounded(5).border(1).border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)
+          .disabled(Boolean(state?.busy || state?.unconfirmed || !writable)))
+        .child(this.askButton(`herd-clarify-send-${ask.id}-${index}`, state?.busy ? 'Checking…' : state?.unconfirmed ? 'Check delivery' : 'Send question', cx => this.sendClarification(ask, index, cx), t,
+          Boolean(state?.busy || !writable || (!state?.unconfirmed && (!row?.target || row?.stale || !this.clarifyInputs[key]?.value().trim()))))))
+      .when(Boolean(state?.unconfirmed && !this.clarifyOpen?.[key]), el => el.child(this.askButton(`herd-clarify-check-${ask.id}-${index}`, 'Check delivery', cx => this.sendClarification(ask, index, cx), t, !writable)))
+      .when(Boolean(state?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(state.error)));
+  }
+
   answerAsk(ask, option, cx) {
     if (this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.sent || this.answerStates?.[ask.id]?.closed || !this.visibleAsks([ask]).length) return;
     this.snapshot();
@@ -481,11 +582,12 @@ export default class Herd extends View {
         .when(Boolean(ask.recommendation && !ask.options?.length), el => el.child(div().text_size(11).text_color(t.muted).child(`Recommended: ${ask.recommendation}`)))
         .when(Boolean(this.askInputs?.[ask.id]), el => el.child(Input.new(this.askInputs[ask.id]).id(`herd-answer-input-${ask.id}`).h(36).px(9).rounded(6).border(1).border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)
           .disabled(Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable))))
-        .child(h_flex().gap(6).flex_wrap().children((ask.options || []).map((option, index) => this.askButton(`herd-answer-option-${ask.id}-${index}`,
-          option + (option === ask.recommendation ? ' · recommended' : ''), cx => this.answerAsk(ask, option, cx), t,
-          Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.unconfirmed || this.answerStates?.[ask.id]?.closed || !writable), option === ask.recommendation)))
-          .child(this.askButton(`herd-answer-send-${ask.id}`, this.answerStates?.[ask.id]?.checking ? 'Checking delivery…' : this.answerStates?.[ask.id]?.sending ? 'Sending…' : this.answerStates?.[ask.id]?.unconfirmed ? 'Check delivery' : 'Send answer', cx => this.answerAsk(ask, null, cx), t,
-            Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.closed || !writable || (!this.answerStates?.[ask.id]?.unconfirmed && !this.askInputs?.[ask.id]?.value().trim())))))
+        .when(Boolean(ask.options?.length), el => el.child(h_flex().gap(7).items_center()
+          .child(this.askButton(`herd-clarify-refresh-${ask.id}`, this.clarificationsBusy ? 'Checking questions…' : 'Refresh questions', cx => this.refreshClarifications(cx, [ask]), t, this.clarificationsBusy || !writable))
+          .child(div().flex_1().min_w(0).text_size(10).text_color(t.muted).child(this.clarifications?.[ask.id]?.error || (!this.clarifications?.[ask.id] ? (this.clarificationsBusy ? 'Checking clarifications…' : 'Refresh questions to load clarifications.') : 'Questions leave this decision open.')))))
+        .children((ask.options || []).map((option, index) => this.optionCard(ask, option, index, t, writable)))
+        .child(this.askButton(`herd-answer-send-${ask.id}`, this.answerStates?.[ask.id]?.checking ? 'Checking delivery…' : this.answerStates?.[ask.id]?.sending ? 'Sending…' : this.answerStates?.[ask.id]?.unconfirmed ? 'Check delivery' : 'Send answer', cx => this.answerAsk(ask, null, cx), t,
+          Boolean(this.answerStates?.[ask.id]?.sending || this.answerStates?.[ask.id]?.closed || !writable || (!this.answerStates?.[ask.id]?.unconfirmed && !this.askInputs?.[ask.id]?.value().trim()))))
         .when(!writable, el => el.child(div().text_size(10.5).text_color(t.muted).child('Read-only: owning personal project unavailable. Refresh to check again.')))
         .when(Boolean(this.answerStates?.[ask.id]?.error), el => el.child(div().text_size(11).text_color(t.blocked).child(this.answerStates[ask.id].error)))
         .child(div().text_size(9.5).text_color(t.dim).child(ask.id)));

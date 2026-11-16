@@ -82,7 +82,23 @@ the invoking ask overlay, then focus the resolved pane; reveal it if another pan
 the grid receipt and terminal splits. Never paste, start a terminal or answer the ask. Inbox copies refresh curated
 asking-institution metadata, including off-space targets, without adding artifact/screen readers. Native QA must
 exercise actual fixture focus, own-overlay closure, zoom, a successor with real kit rename history, unavailable
-state and unchanged fixture ledger bytes. Keep B/C conversation prototypes in the ark separate from this feature.
+state and unchanged fixture ledger bytes. Keep the conversation mockups in the ark as the design record.
+
+Clarification cards create explicit child asks from Al to the asking role, with the original ask as parent and a
+literal `About option <JSON string>:` question envelope. They never choose or answer the parent. Read only each
+displayed parent's owning personal ledger for children; suppress configured cross-institution routes in this helper.
+Do not widen the aggregate or add screen/artifact readers.
+Show open, answered and withdrawn children under the exact option, retaining known cards with a stale label on read
+failure. Resolve current roles from canonical kit metadata and ordered renames; missing roles disable sending but
+retain historical answers. Cross-institution authors outside the owning ledger are unsupported in this slice.
+`clarification-runner.mjs` preserves argv through the existing Bash adapter. A per-question digest journal under
+the app home's `herd-clarifications/` records intent before writing and prevents the same question from being
+opened twice across views/restarts. Check delivery only reads the owning ledger; an ambiguous attempt never retries
+the writer automatically. A stale journal/lock needs inspection, not deletion or resend. The kit remains the record
+of question and answer text; journals retain only IDs, digest keys and attempt metadata. Requests revalidate the
+parent's text, options, state and personal ownership before sending; per-ledger snapshots are not a cross-command
+transaction. Test failures after append and unavailable checks, plus real fixture-ledger opening, folding, narrow
+layout and unchanged parent events in an isolated native app. Never send test asks to real institutions.
 
 `sentences.mjs` recognizes bounded literal Codex assistant prose. It skips queued input, menus, tool bodies,
 credential-like assignments and ambiguous frames. A missing/expired quote stays unavailable on hover only; never invent
