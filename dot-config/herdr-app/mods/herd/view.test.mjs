@@ -148,6 +148,32 @@ test('an older clarification read cannot overwrite a send completed while that r
   await tasks[0]; assert.equal(view.clarifications[ask.id], fresh);
 });
 
+test('an unavailable asking role disables question opening while its recorded answer stays visible', () => {
+  const ask = { id: 'sample:parent', from: 'sample/guide', to: 'al', state: 'open', question: 'Choose?', opened_at: '2026-11-15T12:00:00Z', options: ['Shelf'], owner_project: 'C:/Users/example/Project/sample' };
+  const { view } = harness(); view.askList = [ask];
+  view.clarifications[ask.id] = { target: null, error: 'The asking role is unavailable.', items: [
+    { id: 'sample:child', option: 'Shelf', question: 'A question', state: 'answered', answer: 'Yes', answered_by: 'sample/guide', answerer_name: 'Current · guide' },
+  ] };
+  const tree = view.askListView({}), open = find(tree, 'herd-clarify-open-' + ask.id + '-0');
+  open.click({}, { notify() {} }); assert.equal(Object.keys(view.clarifyInputs).length, 0);
+  assert.ok(find(tree, 'herd-clarification-sample:child')); assert.match(open.values.tooltip, /unavailable/);
+});
+
+test('a confirmed failed-send check restores the draft and enables a separate send without automatically writing', async () => {
+  const modes = [], tasks = [];
+  const ask = { id: 'sample:parent', options: ['Shelf'], owner_project: 'C:/Users/example/Project/sample' };
+  const { view } = harness(new Map(), async (_command, args) => {
+    modes.push(JSON.parse(args[1]).mode);
+    return { code: 0, stdout: JSON.stringify({ schema: 1, state: 'not-sent', parents: [{ id: ask.id, target: { party: 'sample/guide', name: 'Current' }, items: [] }] }) };
+  });
+  view.askList = [ask]; view.clarifications[ask.id] = { target: { party: 'sample/guide', name: 'Current' }, items: [] };
+  const cx = { notify() {}, spawn: body => tasks.push(body(cx)) };
+  view.openClarification(ask, 0, cx); view.clarifyStates[ask.id + '|0'] = { unconfirmed: 'Preserve my question' };
+  view.sendClarification(ask, 0, cx); await tasks[0];
+  assert.deepEqual(modes, ['confirm']); assert.equal(view.clarifyInputs[ask.id + '|0'].value(), 'Preserve my question');
+  assert.equal(view.clarifyStates[ask.id + '|0'].unconfirmed, undefined); assert.match(view.clarifyStates[ask.id + '|0'].error, /Send question/);
+});
+
 test('quiet seats remain visible, dimmed and clickable; rendering sends no terminal actions', () => {
   const { view, calls } = harness();
   const row = find(view.render(), 'herd-seat-t1');

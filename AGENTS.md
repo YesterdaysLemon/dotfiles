@@ -93,12 +93,18 @@ failure. Resolve current roles from canonical kit metadata and ordered renames; 
 retain historical answers. Cross-institution authors outside the owning ledger are unsupported in this slice.
 `clarification-runner.mjs` preserves argv through the existing Bash adapter. A per-question digest journal under
 the app home's `herd-clarifications/` records intent before writing and prevents the same question from being
-opened twice across views/restarts. Check delivery only reads the owning ledger; an ambiguous attempt never retries
-the writer automatically. A stale journal/lock needs inspection, not deletion or resend. The kit remains the record
+opened twice across views/restarts. Check delivery never invokes a writer. Only a recorded completed nonzero exit,
+with no timeout/spawn error/signal, can release its journal after a fresh locked request check proves no matching
+child exists and all baseline IDs remain. It restores the draft for a separate explicit Send question click.
+Ambiguous and old attempted journals stay held; stale locks require inspection. The kit remains the record
 of question and answer text; journals retain only IDs, digest keys and attempt metadata. Requests revalidate the
 parent's text, options, state and personal ownership before sending; per-ledger snapshots are not a cross-command
 transaction. Test failures after append and unavailable checks, plus real fixture-ledger opening, folding, narrow
 layout and unchanged parent events in an isolated native app. Never send test asks to real institutions.
+Answered labels resolve names only from the owning institution's curated role metadata and ordered renames since
+the answer time. Keep the recorded party in a tooltip; a displayed name is the current role holder, not a claim
+about a historical holder. Missing names stay unavailable without hiding answers. Disable question opening while
+the target is unavailable or stale, retaining an in-place reason.
 
 `sentences.mjs` recognizes bounded literal Codex assistant prose. It skips queued input, menus, tool bodies,
 credential-like assignments and ambiguous frames. A missing/expired quote stays unavailable on hover only; never invent

@@ -351,6 +351,7 @@ export default class Herd extends View {
   openClarification(ask, index, cx) {
     const key = `${ask.id}|${index}`;
     this.clarifyInputs ||= {}; this.clarifyOpen ||= {};
+    if (!this.clarifyOpen[key] && (!this.clarifications?.[ask.id]?.target || this.clarifications[ask.id].stale)) return;
     if (!this.clarifyInputs[key]) {
       const input = InputState.new({ placeholder: 'One question about this option' });
       input.on('change', (_event, cx) => cx.notify());
@@ -377,12 +378,15 @@ export default class Herd extends View {
         const result = await exec('node', [appHome() + '/mods/herd/clarification-runner.mjs', JSON.stringify(request)], { cwd: ask.owner_project, timeout: 300000 });
         if (result.code !== 0) throw new Error('Could not check delivery.');
         const response = parseClarificationResponse(result.stdout, [ask]);
-        if (response.parents.length !== 1 || !['sent', 'unconfirmed'].includes(response.state)) throw new Error('Invalid delivery receipt.');
+        if (response.parents.length !== 1 || !['sent', 'unconfirmed', 'not-sent'].includes(response.state)) throw new Error('Invalid delivery receipt.');
         if (response.state === 'sent' && response.parents[0].items.filter(card => card.option === option && card.question === question.trim()).length !== 1) throw new Error('No exact child ask receipt.');
         this.clarifications[ask.id] = { ...response.parents[0], checked: Date.now() };
         if (response.state === 'sent') {
           this.clarifyStates[key] = { sent: true };
           this.clarifyInputs[key]?.set_value(''); this.clarifyOpen[key] = false;
+        } else if (response.state === 'not-sent') {
+          this.clarifyStates[key] = { error: 'No question was recorded. Press Send question to try again.' };
+          this.clarifyInputs[key]?.set_value(question); this.clarifyOpen[key] = true;
         } else this.clarifyStates[key] = { unconfirmed: question, error: 'Delivery is unconfirmed. Check delivery before asking again.' };
       } catch { this.clarifyStates[key] = { unconfirmed: question, error: 'Could not confirm delivery. Check delivery; this will not send again.' }; }
       finally { cx.notify(); }
@@ -396,13 +400,17 @@ export default class Herd extends View {
     return v_flex().id(`herd-option-${ask.id}-${index}`).p(9).gap(7).rounded(6).border(1).border_color(option === ask.recommendation ? t.accent : t.border)
       .child(div().text_size(12).text_color(t.foreground).child(option + (option === ask.recommendation ? ' · recommended' : '')))
       .children(cards.map(card => v_flex().id(`herd-clarification-${card.id}`).p(9).gap(5).rounded(5).bg(t.surface)
-        .child(div().text_size(10).text_color(t.muted).child(card.state === 'open' ? `Waiting for ${row?.target?.name || 'the asking seat'}` : card.state === 'answered' ? `Answered · ${card.answered_by}` : 'Withdrawn'))
+        .child(div().text_size(10).text_color(t.muted)
+          .when(card.state === 'answered', el => el.tooltip(`Recorded answerer: ${card.answered_by}.` + (card.answerer_name && card.answered_by !== 'al' ? ' The name identifies the current holder of that role.' : '')))
+          .child(card.state === 'open' ? `Waiting for ${row?.target?.name || 'the asking seat'}` : card.state === 'answered' ? (card.answerer_name ? `Answered · ${card.answerer_name}` : 'Answered · name unavailable') : 'Withdrawn'))
         .child(div().text_size(11.5).text_color(t.foreground).child(`Al: ${card.question}`))
         .when(card.state === 'answered', el => el.child(this.questionView(card.answer, t)))
         .when(Boolean(card.reason), el => el.child(div().text_size(11).text_color(t.muted).child(card.reason)))))
       .child(h_flex().gap(6).flex_wrap()
         .child(this.askButton(`herd-answer-option-${ask.id}-${index}`, 'Choose this option', cx => this.answerAsk(ask, option, cx), t, answerDisabled, option === ask.recommendation))
-        .child(this.askButton(`herd-clarify-open-${ask.id}-${index}`, this.clarifyOpen?.[key] ? 'Cancel question' : 'Ask about this option', cx => this.openClarification(ask, index, cx), t, !writable || Boolean(state?.busy))))
+        .child(this.askButton(`herd-clarify-open-${ask.id}-${index}`, this.clarifyOpen?.[key] ? 'Cancel question' : 'Ask about this option', cx => this.openClarification(ask, index, cx), t,
+          !writable || Boolean(state?.busy) || (!this.clarifyOpen?.[key] && (!row?.target || row?.stale)))
+          .tooltip(row?.error || (row?.target ? 'Ask the current role holder about this option.' : 'Refresh questions to check the asking role.'))))
       .when(Boolean(this.clarifyOpen?.[key]), el => el
         .child(Input.new(this.clarifyInputs[key]).id(`herd-clarify-input-${ask.id}-${index}`).h(38).px(8).rounded(5).border(1).border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)
           .disabled(Boolean(state?.busy || state?.unconfirmed || !writable)))

@@ -27,7 +27,10 @@ function fixture(t) {
     if (args[2] === 'info') return JSON.stringify(info);
     if (args[2] === 'asks') { if (failure === 'read' && writes) throw new Error('unavailable'); return JSON.stringify(items); }
     assert.equal(args[2], 'ask'); writes++;
-    if (failure !== 'before') items.push(child());
+    if (!['before', 'clean', 'timeout', 'signal'].includes(failure)) items.push(child());
+    if (failure === 'clean' || failure === 'clean-after') throw Object.assign(new Error('clean failure'), { status: 2, signal: null });
+    if (failure === 'timeout') throw Object.assign(new Error('timed out'), { status: 1, code: 'ETIMEDOUT' });
+    if (failure === 'signal') throw Object.assign(new Error('signalled'), { status: 1, signal: 'SIGTERM' });
     if (failure) throw new Error('lost receipt');
     return 'sample:child\n';
   } };
@@ -90,4 +93,52 @@ test('an institution asker uses its current conductor, and older role reuse is n
   f.parent.from = 'sample/guide'; f.info.renames = [{ from: 'guide', to: 'retired', at: '2026-11-14T12:00:00Z' }];
   assert.equal(clarificationTarget(f.parent, f.info, f.home).party, 'sample/guide');
   assert.equal(clarificationCards(f.parent, [f.child()], f.info, f.home).length, 1);
+});
+
+test('Check delivery clears only a completed failed attempt with a fresh empty owning ledger; retry requires another send', t => {
+  const f = fixture(t); f.fail('clean');
+  assert.equal(sendClarification(f.request, f.options).state, 'unconfirmed');
+  assert.equal(sendClarification(f.request, f.options).state, 'unconfirmed'); assert.equal(f.writes(), 1);
+  f.fail(null);
+  const before = f.calls.length;
+  assert.equal(sendClarification({ ...f.request, mode: 'confirm' }, f.options).state, 'not-sent');
+  assert.equal(f.calls.slice(before).some(args => args[0] === 'ask'), false); assert.equal(f.writes(), 1);
+  assert.equal(sendClarification(f.request, f.options).state, 'sent'); assert.equal(f.writes(), 2);
+});
+
+test('timeouts, signals, unavailable confirmation and a child on another recipient never release a retry', t => {
+  for (const failure of ['timeout', 'signal', 'before']) {
+    const f = fixture(t); f.fail(failure); sendClarification(f.request, f.options); f.fail(null);
+    assert.equal(sendClarification({ ...f.request, mode: 'confirm' }, f.options).state, 'unconfirmed');
+    sendClarification(f.request, f.options); assert.equal(f.writes(), 1);
+  }
+  const f = fixture(t); f.fail('clean'); sendClarification(f.request, f.options); f.fail('read');
+  assert.throws(() => sendClarification({ ...f.request, mode: 'confirm' }, f.options));
+  f.fail(null); f.items.push({ ...f.child(), to: 'sample/other' });
+  assert.equal(sendClarification({ ...f.request, mode: 'confirm' }, f.options).state, 'unconfirmed'); assert.equal(f.writes(), 1);
+});
+
+test('a clean error after append confirms the child and keeps its journal from becoming retryable', t => {
+  const f = fixture(t); f.fail('clean-after');
+  assert.equal(sendClarification(f.request, f.options).state, 'sent');
+  assert.equal(sendClarification({ ...f.request, mode: 'confirm' }, f.options).state, 'sent'); assert.equal(f.writes(), 1);
+});
+
+test('a rewound ledger cannot clear a failed request, and a check without a journal creates no journal', t => {
+  const f = fixture(t); f.items.push({ ...f.parent, id: 'sample:other' }); f.fail('clean');
+  sendClarification(f.request, f.options); f.items.pop(); f.fail(null);
+  assert.equal(sendClarification({ ...f.request, mode: 'confirm' }, f.options).state, 'unconfirmed'); assert.equal(f.writes(), 1);
+  const fresh = fixture(t);
+  assert.equal(sendClarification({ ...fresh.request, mode: 'confirm' }, fresh.options).state, 'unconfirmed');
+  assert.equal(fs.existsSync(path.join(fresh.appHome, 'herd-clarifications')), false); assert.equal(fresh.writes(), 0);
+});
+
+test('answered cards use a curated current name through role renames, with raw recorded actor preserved', t => {
+  const f = fixture(t), child = { ...f.child(), state: 'answered', answer: 'Yes', answered_by: 'sample/guide', answered_at: '2026-11-15T13:10:00Z' };
+  f.info.renames = [{ from: 'guide', to: 'vizier', at: '2026-11-15T14:00:00Z' }]; f.info.roles[0].role = 'vizier';
+  const cards = () => clarificationCards(f.parent, [child], f.info, f.home);
+  assert.equal(cards()[0].answerer_name, 'Current · vizier'); assert.equal(cards()[0].answered_by, 'sample/guide');
+  child.answered_by = 'al'; assert.equal(cards()[0].answerer_name, 'Al');
+  child.answered_by = 'other/guide'; assert.equal(cards()[0].answerer_name, null);
+  child.answered_by = 'sample/guide'; f.info.roles = []; assert.equal(cards()[0].answerer_name, null);
 });
