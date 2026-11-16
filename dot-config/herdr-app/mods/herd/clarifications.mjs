@@ -28,6 +28,17 @@ function currentRole(role, opened, info) {
   return role;
 }
 
+function answererName(child, info, owner, userHome) {
+  if (child.answered_by === 'al') return 'Al';
+  const actor = party.exec(child.answered_by || ''), at = Date.parse(child.answered_at);
+  if (!actor || actor[1] !== owner || !Number.isFinite(at)) return null;
+  const role = actor[2] ? currentRole(actor[2], at, info) : info.conductor;
+  const seats = (info.roles || []).filter(seat => seat.role === role && personalFolder(seat.cwd, userHome));
+  if (seats.length !== 1) return null;
+  const name = typeof seats[0].name === 'string' && seats[0].name ? seats[0].name : role;
+  return name === role ? role : `${name} · ${role}`;
+}
+
 export function clarificationTarget(parent, info, userHome) {
   if (!parent || !askId.test(parent.id || '') || parent.to !== 'al' || parent.state !== 'open' ||
       !personalFolder(parent.owner_project, userHome) || info?.schema_version !== 1 ||
@@ -62,6 +73,7 @@ export function clarificationCards(parent, items, info, userHome) {
     if (child.state === 'answered' && (typeof child.answer !== 'string' || child.answer.length > 12000 || !party.test(child.answered_by || ''))) throw new Error('Invalid clarification answer.');
     cards.push({ id: child.id, option, question, state: child.state, opened_at: child.opened_at,
       answer: child.state === 'answered' ? child.answer : null, answered_by: child.state === 'answered' ? child.answered_by : null,
+      answerer_name: child.state === 'answered' ? answererName(child, info, parent.id.split(':')[0], userHome) : null,
       reason: child.state === 'withdrawn' && typeof child.reason === 'string' ? child.reason.slice(0, 4000) : null });
   }
   return cards.sort((a, b) => a.opened_at.localeCompare(b.opened_at) || a.id.localeCompare(b.id));
@@ -80,7 +92,8 @@ export function parseClarificationResponse(stdout, parents) {
     seen.add(row.id);
     for (const card of row.items) if (!askId.test(card?.id || '') || !parent.options.includes(card.option) ||
         typeof card.question !== 'string' || card.question.length > 4000 || !['open', 'answered', 'withdrawn'].includes(card.state) ||
-        (card.state === 'answered' && (typeof card.answer !== 'string' || card.answer.length > 12000))) throw new Error('Invalid clarification response.');
+        (card.state === 'answered' && (typeof card.answer !== 'string' || card.answer.length > 12000 ||
+          (card.answerer_name != null && (typeof card.answerer_name !== 'string' || card.answerer_name.length > 512))))) throw new Error('Invalid clarification response.');
   }
   return value;
 }

@@ -148,11 +148,15 @@ their option. The original decision stays open, and **Choose this option** still
 **Refresh questions** checks the owning ledger; an unavailable refresh retains the previous cards with a stale
 notice. Role renames follow the kit's history, and a missing role leaves previous answers visible while sending
 is unavailable. Authors in another institution are unsupported in this first slice.
+Answered labels use the current role holder's name, with the recorded answerer in a tooltip; the kit does not
+record historical holder names. An unavailable asking role disables new questions while keeping existing cards.
 
 Clarifications require Node and use the existing kit rather than a chat transport. A small local journal outside
 mods prevents the same question on the same option from being sent twice, including after a lost receipt or app
-restart. **Check delivery** reads without resending; uncertain attempts remain uncertain until the owning ledger
-can establish the child. The journal contains IDs and attempt metadata; question/answer text lives in the kit's
+restart. **Check delivery** reads without resending. After a recorded clean failed process exit and a fresh ledger
+check proving no child was recorded, it releases the failed attempt and restores the draft; **Send question** is
+a separate explicit retry. Timeouts, signals and other ambiguous attempts stay held. The journal contains IDs
+and attempt metadata; question/answer text lives in the kit's
 ledger. No messages are pasted into terminals, no model runs, and nothing is written under the watched mods tree.
 
 An ask with a committed `.ps1` `run` path gets a plain Open terminal button. It uses the kit's read-only
